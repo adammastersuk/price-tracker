@@ -6,13 +6,36 @@ export type CheckStatus = "success" | "failed" | "suspicious" | "pending";
 
 export interface PriceHistoryPoint { checkedAt: string; bentsPrice: number; competitorPrice: number | null; }
 export interface NoteEntry { id: string; author: string; message: string; createdAt: string; }
+export interface CompetitorListing {
+  id: string;
+  competitorName: string;
+  competitorProductUrl: string;
+  competitorCurrentPrice: number | null;
+  competitorPromoPrice: number | null;
+  competitorWasPrice: number | null;
+  competitorStockStatus: CompetitorStockStatus;
+  lastCheckedAt: string;
+  lastCheckStatus: CheckStatus;
+  checkErrorMessage: string;
+  rawPriceText: string;
+  extractionSource: string;
+  suspiciousChangeFlag: boolean;
+  priceDifferenceGbp: number | null;
+  priceDifferencePercent: number | null;
+  pricingStatus: PricingStatus;
+}
+
 export interface TrackedProductRow {
   id: string; internalSku: string; productName: string; brand: string; department: string; buyer: string; supplier: string;
-  costPrice: number; bentsRetailPrice: number; marginPercent: number; bentsProductUrl: string;
+  costPrice: number | null; bentsRetailPrice: number; marginPercent: number | null; bentsProductUrl: string;
   competitorName: string; competitorProductUrl: string; competitorCurrentPrice: number | null; competitorPromoPrice: number | null;
   competitorWasPrice: number | null; competitorStockStatus: CompetitorStockStatus; lastCheckedAt: string;
   lastCheckStatus: CheckStatus; checkErrorMessage: string; rawPriceText: string; extractionSource: string; suspiciousChangeFlag: boolean;
   priceDifferenceGbp: number | null; priceDifferencePercent: number | null; pricingStatus: PricingStatus;
+  competitorCount: number;
+  additionalCompetitorCount: number;
+  competitorSummaryLabel: string;
+  competitorListings: CompetitorListing[];
   matchConfidence: MatchConfidence; reviewStatus: MatchConfidence; internalNote: string; actionOwner: string; actionWorkflowStatus: WorkflowStatus;
   noteHistory: NoteEntry[]; history: PriceHistoryPoint[];
 }

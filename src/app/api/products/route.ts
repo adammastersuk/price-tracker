@@ -31,7 +31,22 @@ export async function PUT(request: NextRequest) {
     if (!payload?.id) {
       return NextResponse.json({ error: "id is required" }, { status: 400 });
     }
-    const updated = await updateProduct(payload.id, payload.updates ?? {});
+    const existing = await getProductById(payload.id);
+    if (!existing) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+    const updates = payload.updates ?? {};
+    const bents = Number.isFinite(updates.bents_price) ? Number(updates.bents_price) : existing.bentsRetailPrice;
+    const cost = updates.cost_price === null
+      ? null
+      : Number.isFinite(updates.cost_price)
+        ? Number(updates.cost_price)
+        : existing.costPrice;
+    const marginPercent = cost === null || bents <= 0
+      ? null
+      : Number((((bents - cost) / bents) * 100).toFixed(2));
+
+    const updated = await updateProduct(payload.id, { ...updates, margin_percent: marginPercent });
     return NextResponse.json({ data: updated[0] });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
