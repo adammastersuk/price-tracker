@@ -39,14 +39,16 @@ export class MockCompetitorAdapter implements CompetitorAdapter {
 
   async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
     const hash = [...input.sku].reduce((acc, c) => acc + c.charCodeAt(0), 0);
-    const base = 10 + (hash % 120);
+    const hasPriceSignal = hash % 4 !== 0;
+    const base = 1 + (hash % 40);
+    const current = hasPriceSignal ? Number((base + 0.49).toFixed(2)) : null;
     return {
-      competitor_current_price: Number((base + 0.99).toFixed(2)),
-      competitor_promo_price: hash % 3 === 0 ? Number((base - 1.5).toFixed(2)) : null,
-      competitor_was_price: hash % 5 === 0 ? Number((base + 4).toFixed(2)) : null,
-      competitor_stock_status: hash % 7 === 0 ? "Low Stock" : "In Stock",
-      match_confidence: "Medium",
-      raw_price_text: `Mock generated for ${input.sku}`,
+      competitor_current_price: current,
+      competitor_promo_price: current !== null && hash % 3 === 0 ? Number((current * 0.95).toFixed(2)) : null,
+      competitor_was_price: current !== null && hash % 5 === 0 ? Number((current * 1.08).toFixed(2)) : null,
+      competitor_stock_status: hash % 9 === 0 ? "Low Stock" : "In Stock",
+      match_confidence: hasPriceSignal ? "Low" : "Needs review",
+      raw_price_text: hasPriceSignal ? `Mock estimate for ${input.sku}` : "No reliable mock price",
       extraction_source: "mock",
       metadata: { deterministic_seed: hash }
     };

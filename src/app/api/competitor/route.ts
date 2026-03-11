@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCompetitorPrices, insertCompetitorPrice, insertPriceHistory } from "@/lib/db";
+import { getCompetitorPrices, insertCompetitorPrice, insertPriceHistory, updateCompetitorPrice } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   const productId = request.nextUrl.searchParams.get("productId");
@@ -30,6 +30,29 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ data: inserted[0] }, { status: 201 });
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  }
+}
+
+export async function PUT(request: NextRequest) {
+  try {
+    const payload = await request.json();
+    if (!payload?.id) {
+      return NextResponse.json({ error: "id is required" }, { status: 400 });
+    }
+    const updated = await updateCompetitorPrice(payload.id, payload.updates ?? {});
+
+    if (payload.recordHistory && payload.updates?.product_id && payload.updates?.competitor_name) {
+      await insertPriceHistory({
+        product_id: payload.updates.product_id,
+        competitor_name: payload.updates.competitor_name,
+        price: payload.updates.competitor_current_price,
+        checked_at: payload.updates.last_checked_at
+      });
+    }
+
+    return NextResponse.json({ data: updated[0] });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }

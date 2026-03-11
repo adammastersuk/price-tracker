@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createProduct, insertCompetitorPrice, insertPriceHistory } from "@/lib/db";
+import { insertPriceHistory, upsertCompetitorPrice, upsertProductBySku } from "@/lib/db";
 
 interface ParsedRow {
   rowNumber: number;
@@ -104,6 +104,11 @@ function parseCsv(csvText: string): ParseResult {
   return { rows, skipped, errors };
 }
 
+function calculateMarginPercent(bentsPrice: number, cost?: number): number | undefined {
+  if (!Number.isFinite(cost) || !Number.isFinite(bentsPrice) || bentsPrice <= 0) return undefined;
+  return Number((((bentsPrice - Number(cost)) / bentsPrice) * 100).toFixed(2));
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { csvText } = await request.json();
@@ -119,7 +124,7 @@ export async function POST(request: NextRequest) {
 
     for (const row of parsed.rows) {
       try {
-        const created = await createProduct({
+        const upserted = await upsertProductBySku({
           sku: row.sku,
           name: row.productName,
           bents_price: row.bentsPrice,
@@ -127,10 +132,11 @@ export async function POST(request: NextRequest) {
           buyer: row.buyer,
           supplier: row.supplier,
           department: row.department,
-          cost_price: row.cost
+          cost_price: row.cost,
+          margin_percent: calculateMarginPercent(row.bentsPrice, row.cost)
         });
-        const productId = created[0].id;
-        await insertCompetitorPrice({
+        const productId = upserted[0].id;
+        await upsertCompetitorPrice({
           product_id: productId,
           competitor_name: row.competitorName,
           competitor_url: row.competitorUrl,

@@ -13,7 +13,7 @@ export function queryProducts(rows: TrackedProductRow[], filters: ProductFilters
       && (filters.department === "all" || r.department === filters.department)
       && (filters.supplier === "all" || r.supplier === filters.supplier)
       && (filters.brand === "all" || r.brand === filters.brand)
-      && (filters.competitor === "all" || r.competitorName === filters.competitor)
+      && (filters.competitor === "all" || r.competitorListings.some((c) => c.competitorName === filters.competitor))
       && (filters.status === "all" || r.pricingStatus === filters.status);
   });
 }
@@ -24,7 +24,7 @@ export function uniqueValues(rows: TrackedProductRow[]) {
     departments: [...new Set(rows.map((r) => r.department))],
     suppliers: [...new Set(rows.map((r) => r.supplier))],
     brands: [...new Set(rows.map((r) => r.brand))],
-    competitors: [...new Set(rows.map((r) => r.competitorName))],
+    competitors: [...new Set(rows.flatMap((r) => r.competitorListings.map((c) => c.competitorName)).filter(Boolean))],
     statuses: [...new Set(rows.map((r) => r.pricingStatus))]
   };
 }

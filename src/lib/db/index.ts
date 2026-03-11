@@ -1,4 +1,4 @@
-import { CheckStatus, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
+import { CheckStatus, CompetitorListing, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
 
 interface ProductRecord {
@@ -78,12 +78,44 @@ export interface CompetitorPriceInput {
 const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
 
 function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
-  const latestComp = [...(product.competitor_prices ?? [])].sort((a, b) =>
+  const sortedComps = [...(product.competitor_prices ?? [])].sort((a, b) =>
     new Date(b.last_checked_at).getTime() - new Date(a.last_checked_at).getTime()
-  )[0];
+  );
+  const latestComp = sortedComps[0];
   const latestNote = [...(product.product_notes ?? [])].sort((a, b) =>
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   )[0];
+
+  const competitorListings: CompetitorListing[] = sortedComps.map((comp) => ({
+    id: comp.id,
+    competitorName: comp.competitor_name,
+    competitorProductUrl: comp.competitor_url ?? "",
+    competitorCurrentPrice: comp.competitor_current_price ?? null,
+    competitorPromoPrice: comp.competitor_promo_price ?? null,
+    competitorWasPrice: comp.competitor_was_price ?? null,
+    competitorStockStatus: (comp.competitor_stock_status as CompetitorListing["competitorStockStatus"]) ?? "Unknown",
+    lastCheckedAt: comp.last_checked_at,
+    lastCheckStatus: (comp.last_check_status as CheckStatus) ?? "pending",
+    checkErrorMessage: comp.check_error_message ?? "",
+    rawPriceText: comp.raw_price_text ?? "",
+    extractionSource: comp.extraction_source ?? "",
+    suspiciousChangeFlag: comp.suspicious_change_flag ?? false,
+    priceDifferenceGbp: comp.price_difference_gbp ?? null,
+    priceDifferencePercent: comp.price_difference_percent ?? null,
+    pricingStatus: (comp.pricing_status as PricingStatus) ?? "Needs review"
+  }));
+
+  const competitorCount = competitorListings.length;
+  const additionalCompetitorCount = Math.max(competitorCount - 1, 0);
+  const competitorSummaryLabel = latestComp
+    ? additionalCompetitorCount > 0
+      ? `${latestComp.competitor_name} +${additionalCompetitorCount} more`
+      : latestComp.competitor_name
+    : "No competitor mapping";
+
+  const computedMargin = product.cost_price === null || product.bents_price <= 0
+    ? null
+    : Number((((product.bents_price - product.cost_price) / product.bents_price) * 100).toFixed(2));
 
   return {
     id: product.id,
@@ -93,9 +125,9 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     department: product.department ?? "Unassigned",
     buyer: product.buyer ?? "Unassigned",
     supplier: product.supplier ?? "Unknown",
-    costPrice: Number(product.cost_price ?? 0),
+    costPrice: product.cost_price === null ? null : Number(product.cost_price),
     bentsRetailPrice: Number(product.bents_price ?? 0),
-    marginPercent: Number(product.margin_percent ?? 0),
+    marginPercent: product.margin_percent === null ? computedMargin : Number(product.margin_percent),
     bentsProductUrl: product.product_url ?? "",
     competitorName: latestComp?.competitor_name ?? "No competitor",
     competitorProductUrl: latestComp?.competitor_url ?? "",
@@ -112,6 +144,10 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     priceDifferenceGbp: latestComp?.price_difference_gbp ?? null,
     priceDifferencePercent: latestComp?.price_difference_percent ?? null,
     pricingStatus: (latestComp?.pricing_status as PricingStatus) ?? "Needs review",
+    competitorCount,
+    additionalCompetitorCount,
+    competitorSummaryLabel,
+    competitorListings,
     matchConfidence: "Needs review",
     reviewStatus: "Needs review",
     internalNote: latestNote?.note ?? "",
@@ -152,6 +188,16 @@ export async function createProduct(input: ProductInput): Promise<ProductRecord[
   });
 }
 
+export async function upsertProductBySku(input: ProductInput): Promise<ProductRecord[]> {
+  return supabaseRequest<ProductRecord[]>({
+    table: "products",
+    method: "POST",
+    query: new URLSearchParams({ on_conflict: "sku" }),
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: input
+  });
+}
+
 export async function updateProduct(id: string, updates: Partial<ProductInput>): Promise<ProductRecord[]> {
   const query = new URLSearchParams({ id: `eq.${id}` });
   return supabaseRequest<ProductRecord[]>({
@@ -173,6 +219,16 @@ export async function insertCompetitorPrice(input: CompetitorPriceInput): Promis
     table: "competitor_prices",
     method: "POST",
     headers: { Prefer: "return=representation" },
+    body: input
+  });
+}
+
+export async function upsertCompetitorPrice(input: CompetitorPriceInput): Promise<CompetitorPriceRecord[]> {
+  return supabaseRequest<CompetitorPriceRecord[]>({
+    table: "competitor_prices",
+    method: "POST",
+    query: new URLSearchParams({ on_conflict: "product_id,competitor_name,competitor_url" }),
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
     body: input
   });
 }

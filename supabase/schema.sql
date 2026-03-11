@@ -36,6 +36,10 @@ create table if not exists public.competitor_prices (
   suspicious_change_flag boolean not null default false
 );
 
+alter table if exists public.competitor_prices
+  add constraint competitor_prices_product_competitor_unique
+  unique (product_id, competitor_name, competitor_url);
+
 create table if not exists public.product_notes (
   id uuid primary key default gen_random_uuid(),
   product_id uuid not null references public.products(id) on delete cascade,

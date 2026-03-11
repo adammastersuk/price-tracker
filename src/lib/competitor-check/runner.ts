@@ -24,6 +24,7 @@ interface RefreshTarget {
   competitorUrl: string;
   mappingId?: string;
   previousPrice: number | null;
+  previousValidPrice: number | null;
 }
 
 export interface RefreshFailure {
@@ -59,6 +60,15 @@ function isSuspicious(previousPrice: number | null, nextPrice: number | null): b
   return Math.abs(((nextPrice - previousPrice) / previousPrice) * 100) >= 40;
 }
 
+function lowConfidence(result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
+  return result.match_confidence === "Low" || result.match_confidence === "Needs review";
+}
+
+function isImplausibleAgainstBents(bentsPrice: number, competitorPrice: number | null): boolean {
+  if (competitorPrice === null || bentsPrice <= 0) return false;
+  return competitorPrice < bentsPrice * 0.1 || competitorPrice > bentsPrice * 4;
+}
+
 async function buildTargets(productIds?: string[]): Promise<RefreshTarget[]> {
   const products = await getProducts();
   const filtered = productIds?.length ? products.filter((p) => productIds.includes(p.id)) : products;
@@ -75,38 +85,46 @@ async function buildTargets(productIds?: string[]): Promise<RefreshTarget[]> {
         bentsPrice: product.bentsRetailPrice,
         competitorName: product.competitorName,
         competitorUrl: "",
-        previousPrice: product.competitorCurrentPrice
+        previousPrice: product.competitorCurrentPrice,
+        previousValidPrice: product.competitorCurrentPrice
       });
       continue;
     }
-    const active = mappings[0];
-    targets.push({
-      productId: product.id,
-      sku: product.internalSku,
-      productName: product.productName,
-      brand: product.brand,
-      bentsPrice: product.bentsRetailPrice,
-      competitorName: active.competitor_name,
-      competitorUrl: active.competitor_url ?? "",
-      mappingId: active.id,
-      previousPrice: active.competitor_current_price
-    });
+    for (const mapping of mappings) {
+      targets.push({
+        productId: product.id,
+        sku: product.internalSku,
+        productName: product.productName,
+        brand: product.brand,
+        bentsPrice: product.bentsRetailPrice,
+        competitorName: mapping.competitor_name,
+        competitorUrl: mapping.competitor_url ?? "",
+        mappingId: mapping.id,
+        previousPrice: mapping.competitor_current_price,
+        previousValidPrice: mapping.competitor_current_price
+      });
+    }
   }
 
   return targets;
 }
 
 async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
-  const diff = result.competitor_current_price === null
+  const suspiciousByDelta = isSuspicious(target.previousPrice, result.competitor_current_price);
+  const suspiciousByPlausibility = isImplausibleAgainstBents(target.bentsPrice, result.competitor_current_price);
+  const suspiciousByConfidence = lowConfidence(result) && suspiciousByPlausibility;
+  const suspicious = suspiciousByDelta || suspiciousByConfidence;
+
+  const acceptedCurrentPrice = suspicious ? target.previousValidPrice : result.competitor_current_price;
+  const diff = acceptedCurrentPrice === null
     ? null
-    : Number((target.bentsPrice - result.competitor_current_price).toFixed(2));
-  const diffPct = result.competitor_current_price === null || result.competitor_current_price === 0
+    : Number((target.bentsPrice - (acceptedCurrentPrice ?? 0)).toFixed(2));
+  const diffPct = acceptedCurrentPrice === null || acceptedCurrentPrice === 0
     ? null
-    : Number((((target.bentsPrice - result.competitor_current_price) / result.competitor_current_price) * 100).toFixed(2));
-  const suspicious = isSuspicious(target.previousPrice, result.competitor_current_price);
+    : Number((((target.bentsPrice - acceptedCurrentPrice) / acceptedCurrentPrice) * 100).toFixed(2));
   const now = new Date().toISOString();
   const pricingStatus = derivePricingStatus({
-    competitorCurrentPrice: result.competitor_current_price,
+    competitorCurrentPrice: acceptedCurrentPrice,
     competitorPromoPrice: result.competitor_promo_price,
     competitorStockStatus: result.competitor_stock_status as "In Stock" | "Low Stock" | "Out of Stock" | "Unknown",
     priceDifferencePercent: diffPct
@@ -116,16 +134,16 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
     product_id: target.productId,
     competitor_name: target.competitorName || "Unknown competitor",
     competitor_url: target.competitorUrl,
-    competitor_current_price: result.competitor_current_price ?? undefined,
+    competitor_current_price: acceptedCurrentPrice ?? undefined,
     competitor_promo_price: result.competitor_promo_price ?? undefined,
-    competitor_was_price: result.competitor_was_price ?? undefined,
+    competitor_was_price: (suspicious ? target.previousValidPrice : result.competitor_was_price) ?? undefined,
     competitor_stock_status: result.competitor_stock_status,
     last_checked_at: now,
     price_difference_gbp: diff ?? undefined,
     price_difference_percent: diffPct ?? undefined,
     pricing_status: pricingStatus,
     last_check_status: suspicious ? "suspicious" : "success",
-    check_error_message: "",
+    check_error_message: suspicious ? "Suspicious extraction detected. Previous valid price retained for review." : "",
     raw_price_text: result.raw_price_text,
     extraction_source: result.extraction_source,
     suspicious_change_flag: suspicious
@@ -140,7 +158,7 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
   await insertPriceHistory({
     product_id: target.productId,
     competitor_name: target.competitorName || "Unknown competitor",
-    price: result.competitor_current_price ?? undefined,
+    price: acceptedCurrentPrice ?? undefined,
     checked_at: now
   });
 
