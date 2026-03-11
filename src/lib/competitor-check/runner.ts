@@ -69,6 +69,24 @@ function isImplausibleAgainstBents(bentsPrice: number, competitorPrice: number |
   return competitorPrice < bentsPrice * 0.1 || competitorPrice > bentsPrice * 4;
 }
 
+function suspiciousReason(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
+  const reasons: string[] = [];
+  const nextPrice = result.competitor_current_price;
+  if (isSuspicious(target.previousPrice, nextPrice)) {
+    reasons.push("Large delta vs previous checked competitor price.");
+  }
+  if (isImplausibleAgainstBents(target.bentsPrice, nextPrice)) {
+    reasons.push("Extracted value is implausible against Bents product price context.");
+  }
+  if (nextPrice !== null && target.bentsPrice > 500 && nextPrice < target.bentsPrice * 0.25) {
+    reasons.push("Value appears too low for this product class and may be a delivery/banner threshold token.");
+  }
+  if (lowConfidence(result) && nextPrice !== null) {
+    reasons.push("Extractor confidence is low for the captured price token.");
+  }
+  return reasons;
+}
+
 async function buildTargets(productIds?: string[]): Promise<RefreshTarget[]> {
   const products = await getProducts();
   const filtered = productIds?.length ? products.filter((p) => productIds.includes(p.id)) : products;
@@ -110,10 +128,8 @@ async function buildTargets(productIds?: string[]): Promise<RefreshTarget[]> {
 }
 
 async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
-  const suspiciousByDelta = isSuspicious(target.previousPrice, result.competitor_current_price);
-  const suspiciousByPlausibility = isImplausibleAgainstBents(target.bentsPrice, result.competitor_current_price);
-  const suspiciousByConfidence = lowConfidence(result) && suspiciousByPlausibility;
-  const suspicious = suspiciousByDelta || suspiciousByConfidence;
+  const reasons = suspiciousReason(target, result);
+  const suspicious = reasons.length > 0;
 
   const acceptedCurrentPrice = suspicious ? target.previousValidPrice : result.competitor_current_price;
   const diff = acceptedCurrentPrice === null
@@ -143,7 +159,9 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
     price_difference_percent: diffPct ?? undefined,
     pricing_status: pricingStatus,
     last_check_status: suspicious ? "suspicious" : "success",
-    check_error_message: suspicious ? "Suspicious extraction detected. Previous valid price retained for review." : "",
+    check_error_message: suspicious
+      ? `Suspicious extraction detected. Previous valid price retained for review. ${reasons.join(" ")}`
+      : "",
     raw_price_text: result.raw_price_text,
     extraction_source: result.extraction_source,
     suspicious_change_flag: suspicious

@@ -116,12 +116,23 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     pricingStatus: (comp.pricing_status as PricingStatus) ?? "Needs review"
   }));
 
+  const validListings = competitorListings.filter((comp) =>
+    comp.competitorCurrentPrice !== null
+    && comp.lastCheckStatus !== "failed"
+    && comp.lastCheckStatus !== "suspicious"
+  );
+  const lowestValidListing = [...validListings].sort((a, b) =>
+    (a.competitorCurrentPrice ?? Number.POSITIVE_INFINITY) - (b.competitorCurrentPrice ?? Number.POSITIVE_INFINITY)
+  )[0] ?? null;
+  const fallbackListing = competitorListings[0] ?? null;
+  const summaryListing = lowestValidListing ?? fallbackListing;
+
   const competitorCount = competitorListings.length;
   const additionalCompetitorCount = Math.max(competitorCount - 1, 0);
-  const competitorSummaryLabel = latestComp
+  const competitorSummaryLabel = summaryListing
     ? additionalCompetitorCount > 0
-      ? `${latestComp.competitor_name} +${additionalCompetitorCount} more`
-      : latestComp.competitor_name
+      ? `${summaryListing.competitorName} +${additionalCompetitorCount} more`
+      : summaryListing.competitorName
     : "No competitor mapping";
 
   const computedMargin = product.cost_price === null || product.bents_price <= 0
@@ -140,21 +151,21 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     bentsRetailPrice: Number(product.bents_price ?? 0),
     marginPercent: product.margin_percent === null ? computedMargin : Number(product.margin_percent),
     bentsProductUrl: product.product_url ?? "",
-    competitorName: latestComp?.competitor_name ?? "No competitor",
-    competitorProductUrl: latestComp?.competitor_url ?? "",
-    competitorCurrentPrice: latestComp?.competitor_current_price ?? null,
-    competitorPromoPrice: latestComp?.competitor_promo_price ?? null,
-    competitorWasPrice: latestComp?.competitor_was_price ?? null,
-    competitorStockStatus: (latestComp?.competitor_stock_status as TrackedProductRow["competitorStockStatus"]) ?? "Unknown",
-    lastCheckedAt: latestComp?.last_checked_at ?? product.updated_at,
-    lastCheckStatus: (latestComp?.last_check_status as CheckStatus) ?? "pending",
-    checkErrorMessage: latestComp?.check_error_message ?? "",
-    rawPriceText: latestComp?.raw_price_text ?? "",
-    extractionSource: latestComp?.extraction_source ?? "",
-    suspiciousChangeFlag: latestComp?.suspicious_change_flag ?? false,
-    priceDifferenceGbp: latestComp?.price_difference_gbp ?? null,
-    priceDifferencePercent: latestComp?.price_difference_percent ?? null,
-    pricingStatus: (latestComp?.pricing_status as PricingStatus) ?? "Needs review",
+    competitorName: summaryListing?.competitorName ?? "No competitor",
+    competitorProductUrl: summaryListing?.competitorProductUrl ?? "",
+    competitorCurrentPrice: summaryListing?.competitorCurrentPrice ?? null,
+    competitorPromoPrice: summaryListing?.competitorPromoPrice ?? null,
+    competitorWasPrice: summaryListing?.competitorWasPrice ?? null,
+    competitorStockStatus: summaryListing?.competitorStockStatus ?? "Unknown",
+    lastCheckedAt: summaryListing?.lastCheckedAt ?? product.updated_at,
+    lastCheckStatus: summaryListing?.lastCheckStatus ?? "pending",
+    checkErrorMessage: summaryListing?.checkErrorMessage ?? "",
+    rawPriceText: summaryListing?.rawPriceText ?? "",
+    extractionSource: summaryListing?.extractionSource ?? "",
+    suspiciousChangeFlag: summaryListing?.suspiciousChangeFlag ?? false,
+    priceDifferenceGbp: summaryListing?.priceDifferenceGbp ?? null,
+    priceDifferencePercent: summaryListing?.priceDifferencePercent ?? null,
+    pricingStatus: summaryListing?.pricingStatus ?? "Needs review",
     competitorCount,
     additionalCompetitorCount,
     competitorSummaryLabel,
