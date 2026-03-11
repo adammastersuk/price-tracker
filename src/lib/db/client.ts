@@ -8,7 +8,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 interface RequestOptions {
   table: string;
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   query?: URLSearchParams;
   body?: unknown;
   headers?: Record<string, string>;
