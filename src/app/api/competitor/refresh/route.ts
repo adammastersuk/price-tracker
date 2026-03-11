@@ -1,0 +1,16 @@
+import { NextRequest, NextResponse } from "next/server";
+import { runCompetitorRefresh } from "@/lib/competitor-check/runner";
+
+export async function POST(request: NextRequest) {
+  try {
+    const payload = await request.json().catch(() => ({}));
+    const summary = await runCompetitorRefresh({
+      productIds: payload.productIds,
+      batchSize: payload.batchSize
+    });
+
+    return NextResponse.json({ data: summary });
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  }
+}

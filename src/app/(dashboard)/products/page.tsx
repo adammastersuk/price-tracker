@@ -18,5 +18,5 @@ export default function ProductsPage() {
     loadProducts();
   }, [loadProducts]);
 
-  return <div className="space-y-4"><h2 className="text-xl font-semibold">Products</h2><CsvImport onImported={loadProducts} /><ProductsTable rows={rows} /></div>;
+  return <div className="space-y-4"><h2 className="text-xl font-semibold">Products</h2><CsvImport onImported={loadProducts} /><ProductsTable rows={rows} onRefreshDone={loadProducts} /></div>;
 }

@@ -1,4 +1,4 @@
-import { PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
+import { CheckStatus, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
 
 interface ProductRecord {
@@ -33,6 +33,11 @@ interface CompetitorPriceRecord {
   price_difference_gbp: number | null;
   price_difference_percent: number | null;
   pricing_status: string | null;
+  last_check_status: string | null;
+  check_error_message: string | null;
+  raw_price_text: string | null;
+  extraction_source: string | null;
+  suspicious_change_flag: boolean | null;
 }
 
 interface ProductNoteRecord { id: string; note: string; owner: string | null; workflow_status: string | null; created_at: string; }
@@ -55,14 +60,19 @@ export interface CompetitorPriceInput {
   product_id: string;
   competitor_name: string;
   competitor_url?: string;
-  competitor_current_price?: number;
-  competitor_promo_price?: number;
-  competitor_was_price?: number;
+  competitor_current_price?: number | null;
+  competitor_promo_price?: number | null;
+  competitor_was_price?: number | null;
   competitor_stock_status?: string;
   last_checked_at?: string;
-  price_difference_gbp?: number;
-  price_difference_percent?: number;
+  price_difference_gbp?: number | null;
+  price_difference_percent?: number | null;
   pricing_status?: string;
+  last_check_status?: CheckStatus;
+  check_error_message?: string;
+  raw_price_text?: string;
+  extraction_source?: string;
+  suspicious_change_flag?: boolean;
 }
 
 const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
@@ -94,6 +104,11 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     competitorWasPrice: latestComp?.competitor_was_price ?? null,
     competitorStockStatus: (latestComp?.competitor_stock_status as TrackedProductRow["competitorStockStatus"]) ?? "Unknown",
     lastCheckedAt: latestComp?.last_checked_at ?? product.updated_at,
+    lastCheckStatus: (latestComp?.last_check_status as CheckStatus) ?? "pending",
+    checkErrorMessage: latestComp?.check_error_message ?? "",
+    rawPriceText: latestComp?.raw_price_text ?? "",
+    extractionSource: latestComp?.extraction_source ?? "",
+    suspiciousChangeFlag: latestComp?.suspicious_change_flag ?? false,
     priceDifferenceGbp: latestComp?.price_difference_gbp ?? null,
     priceDifferencePercent: latestComp?.price_difference_percent ?? null,
     pricingStatus: (latestComp?.pricing_status as PricingStatus) ?? "Needs review",
@@ -162,6 +177,18 @@ export async function insertCompetitorPrice(input: CompetitorPriceInput): Promis
   });
 }
 
+
+export async function updateCompetitorPrice(id: string, updates: Partial<CompetitorPriceInput>): Promise<CompetitorPriceRecord[]> {
+  const query = new URLSearchParams({ id: `eq.${id}` });
+  return supabaseRequest<CompetitorPriceRecord[]>({
+    table: "competitor_prices",
+    method: "PATCH",
+    query,
+    headers: { Prefer: "return=representation" },
+    body: updates
+  });
+}
+
 export async function addProductNote(input: { product_id: string; note: string; owner?: string; workflow_status?: string; }): Promise<ProductNoteRecord[]> {
   return supabaseRequest<ProductNoteRecord[]>({
     table: "product_notes",
@@ -171,6 +198,6 @@ export async function addProductNote(input: { product_id: string; note: string; 
   });
 }
 
-export async function insertPriceHistory(input: { product_id: string; competitor_name: string; price?: number; checked_at?: string; }): Promise<PriceHistoryRecord[]> {
+export async function insertPriceHistory(input: { product_id: string; competitor_name: string; price?: number | null; checked_at?: string; }): Promise<PriceHistoryRecord[]> {
   return supabaseRequest<PriceHistoryRecord[]>({ table: "price_history", method: "POST", headers: { Prefer: "return=representation" }, body: input });
 }
