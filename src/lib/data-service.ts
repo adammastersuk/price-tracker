@@ -29,14 +29,23 @@ export function uniqueValues(rows: TrackedProductRow[]) {
   };
 }
 
+export function exceptionReason(row: TrackedProductRow): string {
+  const stale = Date.now() - new Date(row.lastCheckedAt).getTime() > 24 * 3600_000;
+  if (!row.competitorProductUrl) return "Missing competitor URL";
+  if (row.lastCheckStatus === "failed") return "Failed check";
+  if (stale) return "Stale check";
+  if (row.suspiciousChangeFlag) return "Suspicious price change";
+  if (row.competitorCurrentPrice === null) return "Missing current price";
+  if (row.pricingStatus === "Promo discrepancy") return "Promo discrepancy";
+  if (row.pricingStatus === "Higher than competitor" && (row.priceDifferencePercent ?? 0) > 10) return "Materially higher than competitor";
+  return "Review required";
+}
+
 export function exceptionQueue(rows: TrackedProductRow[]) {
-  return rows.filter((r) =>
-    r.competitorCurrentPrice === null
-    || r.matchConfidence === "Low"
-    || r.pricingStatus === "Promo discrepancy"
-    || (r.priceDifferencePercent !== null && r.priceDifferencePercent > 10)
-    || Date.now() - new Date(r.lastCheckedAt).getTime() > 48 * 3600_000
-  );
+  return rows.filter((r) => {
+    const reason = exceptionReason(r);
+    return reason !== "Review required";
+  });
 }
 
 export function dashboardStats(rows: TrackedProductRow[]) {

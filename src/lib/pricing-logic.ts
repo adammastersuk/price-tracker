@@ -1,6 +1,6 @@
 import { PricingStatus, TrackedProductRow } from "@/types/pricing";
 
-export const IN_LINE_TOLERANCE_PERCENT = 3;
+export const IN_LINE_TOLERANCE_PERCENT = Number.parseFloat(process.env.DEFAULT_PRICE_TOLERANCE ?? "3") || 3;
 
 export function derivePricingStatus(row: Pick<TrackedProductRow, "competitorCurrentPrice"|"competitorPromoPrice"|"competitorStockStatus"|"priceDifferencePercent">): PricingStatus {
   if (row.competitorStockStatus === "Out of Stock") return "Competitor out of stock";

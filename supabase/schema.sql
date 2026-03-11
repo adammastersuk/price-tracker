@@ -28,7 +28,12 @@ create table if not exists public.competitor_prices (
   last_checked_at timestamptz not null default now(),
   price_difference_gbp numeric(12,2),
   price_difference_percent numeric(8,2),
-  pricing_status text
+  pricing_status text,
+  last_check_status text not null default 'pending',
+  check_error_message text,
+  raw_price_text text,
+  extraction_source text,
+  suspicious_change_flag boolean not null default false
 );
 
 create table if not exists public.product_notes (
