@@ -14,6 +14,8 @@ interface ProductForm { sku: string; name: string; brand: string; buyer: string;
 interface DuplicateSkuInfo { sourceProductId: string; targetProductId: string; targetSku: string; targetName: string; }
 interface MergeSummary { movedCompetitorCount: number; skippedDuplicateCompetitorCount: number; movedNotesCount: number; movedHistoryCount: number; sourceDeleted: boolean; }
 type ProductFormTextKey = "sku" | "name" | "brand" | "buyer" | "supplier" | "department" | "product_url" | "cost_price";
+type SortKey = "sku" | "product" | "buyer" | "bents" | "competitor" | "diff" | "status" | "workflow";
+type SortDirection = "asc" | "desc";
 
 const competitorStatusLabel = (c: CompetitorListing) => {
   if (c.lastCheckStatus === "pending") return "Pending check";
@@ -23,6 +25,22 @@ const competitorStatusLabel = (c: CompetitorListing) => {
 };
 
 const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
+
+const competitorSummary = (row: TrackedProductRow) => {
+  const valid = row.competitorListings.filter((c) => c.competitorCurrentPrice !== null && c.lastCheckStatus === "success");
+  const lowest = [...valid].sort((a, b) => (a.competitorCurrentPrice ?? 0) - (b.competitorCurrentPrice ?? 0))[0];
+  if (lowest) {
+    return {
+      primary: currency(lowest.competitorCurrentPrice ?? 0),
+      secondary: lowest.competitorName,
+      extra: row.competitorCount > 1 ? `+${row.competitorCount - 1} more` : ""
+    };
+  }
+
+  if (row.competitorListings.some((c) => c.lastCheckStatus === "pending")) return { primary: "Pending check", secondary: "", extra: "" };
+  if (row.competitorListings.some((c) => c.lastCheckStatus === "failed")) return { primary: "Failed check", secondary: "", extra: "" };
+  return { primary: "No valid price", secondary: row.competitorName === "No competitor" ? "" : row.competitorName, extra: "" };
+};
 
 export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; }) {
   const [filters, setFilters] = useState(defaultFilters);
@@ -36,7 +54,33 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
   const [duplicateSku, setDuplicateSku] = useState<DuplicateSkuInfo | null>(null);
   const [mergeSummary, setMergeSummary] = useState<MergeSummary | null>(null);
   const [merging, setMerging] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("sku");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
+  const sortedRows = useMemo(() => {
+    const direction = sortDirection === "asc" ? 1 : -1;
+    const nullRank = (value: number | null | undefined) => (value === null || value === undefined ? Number.POSITIVE_INFINITY : value);
+    return [...filteredRows].sort((a, b) => {
+      const aComp = competitorSummary(a);
+      const bComp = competitorSummary(b);
+      switch (sortKey) {
+        case "sku": return direction * a.internalSku.localeCompare(b.internalSku);
+        case "product": return direction * a.productName.localeCompare(b.productName);
+        case "buyer": return direction * a.buyer.localeCompare(b.buyer);
+        case "bents": return direction * (a.bentsRetailPrice - b.bentsRetailPrice);
+        case "competitor": {
+          const aValue = a.competitorCurrentPrice ?? nullRank(undefined);
+          const bValue = b.competitorCurrentPrice ?? nullRank(undefined);
+          if (Number.isFinite(aValue) && Number.isFinite(bValue)) return direction * (aValue - bValue);
+          return direction * aComp.primary.localeCompare(bComp.primary);
+        }
+        case "diff": return direction * ((a.priceDifferencePercent ?? nullRank(undefined)) - (b.priceDifferencePercent ?? nullRank(undefined)));
+        case "status": return direction * a.pricingStatus.localeCompare(b.pricingStatus);
+        case "workflow": return direction * a.actionWorkflowStatus.localeCompare(b.actionWorkflowStatus);
+        default: return 0;
+      }
+    });
+  }, [filteredRows, sortDirection, sortKey]);
   const values = useMemo(() => uniqueValues(rows), [rows]);
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
   const [productForm, setProductForm] = useState<ProductForm | null>(null);
@@ -198,6 +242,17 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     link.click();
   };
 
+  const onSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection((prev) => prev === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(key);
+    setSortDirection("asc");
+  };
+
+  const sortIndicator = (key: SortKey) => sortKey === key ? (sortDirection === "asc" ? "▲" : "▼") : "↕";
+
   return (
     <div className="space-y-4">
       <Card><CardContent className="grid gap-3 md:grid-cols-3 lg:grid-cols-7">
@@ -208,16 +263,21 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
         <Select value={filters.competitor} onChange={(e) => setFilters({ ...filters, competitor: e.target.value })}><option value="all">All competitor</option>{values.competitors.map((v) => <option key={v}>{v}</option>)}</Select>
         <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="all">All status</option>{values.statuses.map((v) => <option key={v}>{v}</option>)}</Select>
       </CardContent></Card>
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{filteredRows.length} products</p><div className="flex gap-2"><Button onClick={downloadCsv}>Export CSV</Button><Button onClick={() => runRefresh(selectedIds)} disabled={refreshing || !selectedIds.length}>Refresh selected rows</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{sortedRows.length} products</p><div className="flex gap-2"><Button onClick={downloadCsv}>Export CSV</Button><Button onClick={() => runRefresh(selectedIds)} disabled={refreshing || !selectedIds.length}>Refresh selected rows</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
       {message && <p className="text-sm text-slate-700">{message}</p>}
 
       <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel">
-        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600"><th className="px-3 py-2"></th>{["SKU","Product","Buyer","Bents","Competitor","Diff","Status","Workflow"].map((h)=><th key={h} className="px-3 py-2">{h}</th>)}</tr></thead>
-          <tbody>{filteredRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""}`} onClick={() => setSelectedId(r.id)}>
+        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600"><th className="px-3 py-2"></th>{([
+          ["SKU", "sku"], ["Product", "product"], ["Buyer", "buyer"], ["Bents", "bents"], ["Competitor", "competitor"], ["Diff", "diff"], ["Status", "status"], ["Workflow", "workflow"]
+        ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
+          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""}`} onClick={() => setSelectedId(r.id)}>
             <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, r.id] : prev.filter((id) => id !== r.id))} /></td>
             <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
-            <td className="px-3 py-2"><p className="font-medium">{r.competitorName || "No competitor mapping"}</p><p className="text-xs text-slate-600">{r.competitorListings[0] ? competitorStatusLabel(r.competitorListings[0]) : "No competitor mapping"}</p>{r.additionalCompetitorCount > 0 && <p className="text-xs text-slate-500">+{r.additionalCompetitorCount} more</p>}</td>
+            <td className="px-3 py-2">{(() => {
+              const summary = competitorSummary(r);
+              return <><p className="font-semibold text-slate-900">{summary.primary}</p>{summary.secondary && <p className="text-xs text-slate-600">{summary.secondary}</p>}{summary.extra && <p className="text-xs text-slate-500">{summary.extra}</p>}</>;
+            })()}</td>
             <td className="px-3 py-2">{r.priceDifferencePercent !== null ? pct(r.priceDifferencePercent) : "-"}</td><td className="px-3 py-2"><PricingStatusChip status={r.pricingStatus} /></td>
             <td className="px-3 py-2"><WorkflowChip status={r.actionWorkflowStatus} /></td></tr>)}</tbody>
         </table>

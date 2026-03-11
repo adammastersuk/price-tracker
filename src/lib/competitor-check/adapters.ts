@@ -30,6 +30,177 @@ function parseCurrencyLike(value: string): number | null {
   return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : null;
 }
 
+interface PriceCandidate {
+  value: number;
+  context: string;
+  score: number;
+  source: string;
+}
+
+const NEGATIVE_PRICE_CONTEXT = [
+  "delivery",
+  "orders over",
+  "order over",
+  "finance",
+  "per month",
+  "monthly",
+  "voucher",
+  "promo code",
+  "newsletter",
+  "free shipping",
+  "free uk mainland"
+];
+
+const POSITIVE_PRICE_CONTEXT = [
+  "itemprop=\"price\"",
+  "product-price",
+  "product price",
+  "price-wrapper",
+  "price block",
+  "price-container",
+  "add to basket",
+  "add-to-basket",
+  "add to cart",
+  "buy now",
+  "preorder",
+  "now",
+  "was",
+  "our price"
+];
+
+const GENERIC_PRICE_RE = /(?:£|&pound;|GBP)\s?([\d,.]{1,12})/gi;
+
+function hostFromUrl(raw: string): string {
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function scoreContext(context: string): number {
+  const normalized = context.toLowerCase();
+  let score = 0;
+  for (const token of POSITIVE_PRICE_CONTEXT) {
+    if (normalized.includes(token)) score += 3;
+  }
+  for (const token of NEGATIVE_PRICE_CONTEXT) {
+    if (normalized.includes(token)) score -= 5;
+  }
+  return score;
+}
+
+function extractHeuristicCandidates(html: string): PriceCandidate[] {
+  const candidates: PriceCandidate[] = [];
+  for (const match of html.matchAll(GENERIC_PRICE_RE)) {
+    const full = match[0] ?? "";
+    const value = parseCurrencyLike(full);
+    if (value === null || value < 0.1 || value > 100000) continue;
+    const idx = match.index ?? 0;
+    const context = html.slice(Math.max(0, idx - 160), Math.min(html.length, idx + 200));
+    const score = scoreContext(context);
+    candidates.push({ value, context: context.replace(/\s+/g, " ").trim(), score, source: "currency_token" });
+  }
+
+  for (const match of html.matchAll(/itemprop="price"[^>]*content="([\d.]{1,12})"|content="([\d.]{1,12})"[^>]*itemprop="price"/gi)) {
+    const value = parseCurrencyLike(match[1] ?? match[2] ?? "");
+    if (value === null || value < 0.1 || value > 100000) continue;
+    candidates.push({ value, context: match[0], score: 8, source: "itemprop_price" });
+  }
+
+  for (const match of html.matchAll(/"price"\s*[:=]\s*"?([\d.]{1,12})"?/gi)) {
+    const value = parseCurrencyLike(match[1] ?? "");
+    if (value === null || value < 0.1 || value > 100000) continue;
+    const idx = match.index ?? 0;
+    const context = html.slice(Math.max(0, idx - 120), Math.min(html.length, idx + 120));
+    candidates.push({ value, context: context.replace(/\s+/g, " ").trim(), score: 5, source: "json_price" });
+  }
+
+  return candidates;
+}
+
+function pickBestPrice(candidates: PriceCandidate[]) {
+  const unique = new Map<number, PriceCandidate>();
+  for (const candidate of candidates) {
+    const existing = unique.get(candidate.value);
+    if (!existing || candidate.score > existing.score) {
+      unique.set(candidate.value, candidate);
+    }
+  }
+
+  const ranked = [...unique.values()].sort((a, b) => b.score - a.score || b.value - a.value);
+  const viable = ranked.filter((candidate) => candidate.score >= 0);
+  const best = viable[0] ?? null;
+  const alternates = viable.slice(1, 5).map((candidate) => ({
+    value: candidate.value,
+    score: candidate.score,
+    source: candidate.source
+  }));
+
+  return { best, alternates, rankedCount: ranked.length };
+}
+
+class GardenFurnitureWorldAdapter implements CompetitorAdapter {
+  name = "garden-furniture-world";
+
+  supports(url: string) {
+    return /gardenfurnitureworld\.co\.uk/i.test(hostFromUrl(url) || url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new Error(`GFW adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const scriptMatches = [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
+    const jsonPrices: number[] = [];
+    for (const scriptMatch of scriptMatches) {
+      const blob = scriptMatch[1] ?? "";
+      const direct = [...blob.matchAll(/"price"\s*:\s*"?([\d.]{1,12})"?/gi)];
+      for (const priceMatch of direct) {
+        const parsed = parseCurrencyLike(priceMatch[1] ?? "");
+        if (parsed !== null) jsonPrices.push(parsed);
+      }
+    }
+
+    const blockCandidates = extractHeuristicCandidates(html)
+      .map((candidate) => ({
+        ...candidate,
+        score: candidate.score + (/product|basket|add to basket|price|now|was/i.test(candidate.context) ? 4 : 0)
+      }));
+    const jsonCandidates = [...new Set(jsonPrices)].map((value) => ({ value, context: "json-ld", score: 9, source: "json_ld" }));
+    const { best, alternates, rankedCount } = pickBestPrice([...jsonCandidates, ...blockCandidates]);
+
+    const wasMatch = html.match(/(?:was|rrp)[^£]{0,50}(£|&pound;)\s?([\d,.]{1,12})/i);
+    const was = parseCurrencyLike(wasMatch?.[0] ?? "");
+    const promoContext = html.match(/(?:save\s+\d+%|sale|special offer|limited time)/i)?.[0] ?? "";
+    const stock = /out of stock|sold out|unavailable/i.test(html)
+      ? "Out of Stock"
+      : /low stock|only \d+ left/i.test(html)
+        ? "Low Stock"
+        : "In Stock";
+
+    return {
+      competitor_current_price: best?.value ?? null,
+      competitor_promo_price: best && was && best.value < was ? best.value : null,
+      competitor_was_price: was,
+      competitor_stock_status: stock,
+      match_confidence: best ? (best.score >= 9 ? "High" : best.score >= 5 ? "Medium" : "Low") : "Needs review",
+      raw_price_text: best?.context.slice(0, 180),
+      extraction_source: "garden_furniture_world",
+      metadata: {
+        ranked_count: rankedCount,
+        alternates,
+        promo_context: promoContext
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -76,31 +247,32 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const html = await response.text();
-      const snippets = [
-        ...html.matchAll(/(?:£|&pound;|GBP)\s?([\d,.]{1,12})/gi),
-        ...html.matchAll(/"price"\s*[:=]\s*"?([\d.]{1,12})"?/gi),
-        ...html.matchAll(/content="([\d.]{1,12})"\s*itemprop="price"/gi)
-      ];
-
-      const candidatePrices = snippets
-        .map((m) => parseCurrencyLike(m[0] ?? m[1] ?? ""))
-        .filter((v): v is number => v !== null)
-        .filter((v) => v > 0.1 && v < 10000);
-
-      const uniquePrices = [...new Set(candidatePrices)];
-      const current = uniquePrices[0] ?? null;
-      const promo = uniquePrices.find((v) => current !== null && v < current) ?? null;
-      const was = uniquePrices.find((v) => current !== null && v > current) ?? null;
+      const { best, alternates, rankedCount } = pickBestPrice(extractHeuristicCandidates(html));
+      const current = best?.value ?? null;
+      const promo = alternates.find((v) => current !== null && v.value < current)?.value ?? null;
+      const was = alternates.find((v) => current !== null && v.value > current)?.value ?? null;
+      const blockedByContext = best ? scoreContext(best.context) < 0 : false;
 
       return {
         competitor_current_price: current,
         competitor_promo_price: promo,
         competitor_was_price: was,
         competitor_stock_status: /out of stock|sold out/i.test(html) ? "Out of Stock" : "In Stock",
-        match_confidence: current ? (promo || was ? "Medium" : "Low") : "Needs review",
-        raw_price_text: snippets[0]?.[0]?.slice(0, 120),
+        match_confidence: current
+          ? blockedByContext
+            ? "Needs review"
+            : best && best.score >= 7
+              ? "Medium"
+              : "Low"
+          : "Needs review",
+        raw_price_text: best?.context?.slice(0, 120),
         extraction_source: "html_regex",
-        metadata: { candidate_count: uniquePrices.length }
+        metadata: {
+          candidate_count: rankedCount,
+          alternates,
+          chosen_source: best?.source,
+          blocked_by_negative_context: blockedByContext
+        }
       };
     } catch (error) {
       throw new Error(`Generic extractor failed: ${(error as Error).message}`);
@@ -123,6 +295,7 @@ export class RetailerPlaceholderAdapter implements CompetitorAdapter {
 }
 
 const adapters: CompetitorAdapter[] = [
+  new GardenFurnitureWorldAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
