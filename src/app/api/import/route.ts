@@ -59,13 +59,16 @@ export async function POST(request: NextRequest) {
       });
       const productId = created[0].id;
       await insertCompetitorPrice({
-        product_id: productId,
-        competitor_name: row.competitorName,
-        competitor_url: row.competitorUrl,
-        competitor_current_price: null,
-        pricing_status: "Needs review"
-      });
-      await insertPriceHistory({ product_id: productId, competitor_name: row.competitorName, price: null });
+  product_id: productId,
+  competitor_name: row.competitorName,
+  competitor_url: row.competitorUrl,
+  pricing_status: "Needs review"
+});
+
+await insertPriceHistory({
+  product_id: productId,
+  competitor_name: row.competitorName
+});
     }
 
     return NextResponse.json({ imported: rows.length });
