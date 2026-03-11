@@ -18,9 +18,18 @@ export const seededRows: TrackedProductRow[] = Array.from({ length: 30 }).map((_
   const cp = competitors[index % competitors.length];
   const bentsPrice = Number((b[7] + (index % 3 === 0 ? 0 : (index % 2 === 0 ? 20 : -15))).toFixed(2));
   const competitorCurrent = index % 7 === 0 ? null : Number((bentsPrice + ((index % 5) - 2) * 18).toFixed(2));
-  const promo = competitorCurrent && index % 6 === 0 ? Number((competitorCurrent * 0.9).toFixed(2)) : null;
-  const diffGbp = competitorCurrent === null ? null : Number((bentsPrice - competitorCurrent).toFixed(2));
-  const diffPct = competitorCurrent === null ? null : Number(((diffGbp / competitorCurrent) * 100).toFixed(2));
+const promo =
+  competitorCurrent && index % 6 === 0
+    ? Number((competitorCurrent * 0.9).toFixed(2))
+    : null;
+
+let diffGbp: number | null = null;
+let diffPct: number | null = null;
+
+if (competitorCurrent !== null) {
+  diffGbp = Number((bentsPrice - competitorCurrent).toFixed(2));
+  diffPct = Number((((bentsPrice - competitorCurrent) / competitorCurrent) * 100).toFixed(2));
+}
   const competitorStockStatus = stock[index % stock.length];
   const pricingStatus = derivePricingStatus({ competitorCurrentPrice: competitorCurrent, competitorPromoPrice: promo, competitorStockStatus, priceDifferencePercent: diffPct });
   const marginPercent = Number((((bentsPrice - b[6]) / bentsPrice) * 100).toFixed(1));
