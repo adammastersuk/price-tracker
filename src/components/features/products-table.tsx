@@ -9,13 +9,14 @@ import { currency, pct } from "@/lib/utils";
 import { materialGap } from "@/lib/pricing-logic";
 import { TrackedProductRow } from "@/types/pricing";
 
-export function ProductsTable() {
+export function ProductsTable({ rows }: { rows: TrackedProductRow[] }) {
   const [filters, setFilters] = useState(defaultFilters);
   const [selected, setSelected] = useState<TrackedProductRow | null>(null);
-  const rows = useMemo(() => queryProducts(filters), [filters]);
+  const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
+  const values = useMemo(() => uniqueValues(rows), [rows]);
 
   const downloadCsv = () => {
-    const blob = new Blob([exportProductsCsv(rows)], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob([exportProductsCsv(filteredRows)], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -27,16 +28,16 @@ export function ProductsTable() {
     <div className="space-y-4">
       <Card><CardContent className="grid gap-3 md:grid-cols-3 lg:grid-cols-7">
         <Input placeholder="Search SKU or product" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} className="lg:col-span-2" />
-        <Select value={filters.buyer} onChange={(e) => setFilters({ ...filters, buyer: e.target.value })}><option value="all">All buyer</option>{uniqueValues.buyers.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}><option value="all">All department</option>{uniqueValues.departments.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.supplier} onChange={(e) => setFilters({ ...filters, supplier: e.target.value })}><option value="all">All supplier</option>{uniqueValues.suppliers.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.competitor} onChange={(e) => setFilters({ ...filters, competitor: e.target.value })}><option value="all">All competitor</option>{uniqueValues.competitors.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="all">All status</option>{uniqueValues.statuses.map((v) => <option key={v}>{v}</option>)}</Select>
+        <Select value={filters.buyer} onChange={(e) => setFilters({ ...filters, buyer: e.target.value })}><option value="all">All buyer</option>{values.buyers.map((v) => <option key={v}>{v}</option>)}</Select>
+        <Select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}><option value="all">All department</option>{values.departments.map((v) => <option key={v}>{v}</option>)}</Select>
+        <Select value={filters.supplier} onChange={(e) => setFilters({ ...filters, supplier: e.target.value })}><option value="all">All supplier</option>{values.suppliers.map((v) => <option key={v}>{v}</option>)}</Select>
+        <Select value={filters.competitor} onChange={(e) => setFilters({ ...filters, competitor: e.target.value })}><option value="all">All competitor</option>{values.competitors.map((v) => <option key={v}>{v}</option>)}</Select>
+        <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="all">All status</option>{values.statuses.map((v) => <option key={v}>{v}</option>)}</Select>
       </CardContent></Card>
-      <div className="flex justify-between"><p className="text-sm text-slate-600">{rows.length} products</p><Button onClick={downloadCsv}>Export CSV</Button></div>
+      <div className="flex justify-between"><p className="text-sm text-slate-600">{filteredRows.length} products</p><Button onClick={downloadCsv}>Export CSV</Button></div>
       <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel">
         <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600">{["SKU","Product","Buyer","Bents","Competitor","Diff","Status","Workflow"].map((h)=><th key={h} className="px-3 py-2">{h}</th>)}</tr></thead>
-          <tbody>{rows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""}`} onClick={() => setSelected(r)}>
+          <tbody>{filteredRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""}`} onClick={() => setSelected(r)}>
             <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td><td className="px-3 py-2">{r.competitorCurrentPrice ? currency(r.competitorCurrentPrice) : "N/A"}</td>
             <td className="px-3 py-2">{r.priceDifferencePercent !== null ? pct(r.priceDifferencePercent) : "-"}</td><td className="px-3 py-2"><PricingStatusChip status={r.pricingStatus} /></td>

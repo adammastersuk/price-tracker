@@ -1,9 +1,21 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { DashboardCards } from "@/components/features/dashboard-cards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { dashboardStats } from "@/lib/data-service";
+import { TrackedProductRow } from "@/types/pricing";
 
 export default function DashboardPage() {
-  const stats = dashboardStats();
+  const [rows, setRows] = useState<TrackedProductRow[]>([]);
+
+  useEffect(() => {
+    fetch("/api/products", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((payload) => setRows(payload.data ?? []));
+  }, []);
+
+  const stats = dashboardStats(rows);
   return (
     <div className="space-y-5">
       <DashboardCards stats={stats} />

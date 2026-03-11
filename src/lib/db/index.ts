@@ -1,0 +1,176 @@
+import { PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
+import { supabaseRequest } from "@/lib/db/client";
+
+interface ProductRecord {
+  id: string;
+  sku: string;
+  name: string;
+  brand: string | null;
+  department: string | null;
+  buyer: string | null;
+  supplier: string | null;
+  cost_price: number | null;
+  bents_price: number;
+  margin_percent: number | null;
+  product_url: string | null;
+  created_at: string;
+  updated_at: string;
+  competitor_prices?: CompetitorPriceRecord[];
+  product_notes?: ProductNoteRecord[];
+  price_history?: PriceHistoryRecord[];
+}
+
+interface CompetitorPriceRecord {
+  id: string;
+  product_id: string;
+  competitor_name: string;
+  competitor_url: string | null;
+  competitor_current_price: number | null;
+  competitor_promo_price: number | null;
+  competitor_was_price: number | null;
+  competitor_stock_status: string | null;
+  last_checked_at: string;
+  price_difference_gbp: number | null;
+  price_difference_percent: number | null;
+  pricing_status: string | null;
+}
+
+interface ProductNoteRecord { id: string; note: string; owner: string | null; workflow_status: string | null; created_at: string; }
+interface PriceHistoryRecord { id: string; competitor_name: string; price: number | null; checked_at: string; }
+
+export interface ProductInput {
+  sku: string;
+  name: string;
+  brand?: string;
+  department?: string;
+  buyer?: string;
+  supplier?: string;
+  cost_price?: number;
+  bents_price: number;
+  margin_percent?: number;
+  product_url?: string;
+}
+
+export interface CompetitorPriceInput {
+  product_id: string;
+  competitor_name: string;
+  competitor_url?: string;
+  competitor_current_price?: number;
+  competitor_promo_price?: number;
+  competitor_was_price?: number;
+  competitor_stock_status?: string;
+  last_checked_at?: string;
+  price_difference_gbp?: number;
+  price_difference_percent?: number;
+  pricing_status?: string;
+}
+
+const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
+
+function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
+  const latestComp = [...(product.competitor_prices ?? [])].sort((a, b) =>
+    new Date(b.last_checked_at).getTime() - new Date(a.last_checked_at).getTime()
+  )[0];
+  const latestNote = [...(product.product_notes ?? [])].sort((a, b) =>
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )[0];
+
+  return {
+    id: product.id,
+    internalSku: product.sku,
+    productName: product.name,
+    brand: product.brand ?? "Unknown",
+    department: product.department ?? "Unassigned",
+    buyer: product.buyer ?? "Unassigned",
+    supplier: product.supplier ?? "Unknown",
+    costPrice: Number(product.cost_price ?? 0),
+    bentsRetailPrice: Number(product.bents_price ?? 0),
+    marginPercent: Number(product.margin_percent ?? 0),
+    bentsProductUrl: product.product_url ?? "",
+    competitorName: latestComp?.competitor_name ?? "No competitor",
+    competitorProductUrl: latestComp?.competitor_url ?? "",
+    competitorCurrentPrice: latestComp?.competitor_current_price ?? null,
+    competitorPromoPrice: latestComp?.competitor_promo_price ?? null,
+    competitorWasPrice: latestComp?.competitor_was_price ?? null,
+    competitorStockStatus: (latestComp?.competitor_stock_status as TrackedProductRow["competitorStockStatus"]) ?? "Unknown",
+    lastCheckedAt: latestComp?.last_checked_at ?? product.updated_at,
+    priceDifferenceGbp: latestComp?.price_difference_gbp ?? null,
+    priceDifferencePercent: latestComp?.price_difference_percent ?? null,
+    pricingStatus: (latestComp?.pricing_status as PricingStatus) ?? "Needs review",
+    matchConfidence: "Needs review",
+    reviewStatus: "Needs review",
+    internalNote: latestNote?.note ?? "",
+    actionOwner: latestNote?.owner ?? "Unassigned",
+    actionWorkflowStatus: (latestNote?.workflow_status as WorkflowStatus) ?? "Open",
+    noteHistory: (product.product_notes ?? []).map((n) => ({
+      id: n.id,
+      author: n.owner ?? "Unknown",
+      message: n.note,
+      createdAt: n.created_at
+    })),
+    history: (product.price_history ?? []).map((h) => ({
+      checkedAt: h.checked_at,
+      bentsPrice: Number(product.bents_price ?? 0),
+      competitorPrice: h.price
+    }))
+  };
+}
+
+export async function getProducts(): Promise<TrackedProductRow[]> {
+  const query = new URLSearchParams({ select: productSelect, order: "updated_at.desc" });
+  const rows = await supabaseRequest<ProductRecord[]>({ table: "products", query });
+  return rows.map(mapToTrackedProductRow);
+}
+
+export async function getProductById(productId: string): Promise<TrackedProductRow | null> {
+  const query = new URLSearchParams({ select: productSelect, id: `eq.${productId}`, limit: "1" });
+  const rows = await supabaseRequest<ProductRecord[]>({ table: "products", query });
+  return rows[0] ? mapToTrackedProductRow(rows[0]) : null;
+}
+
+export async function createProduct(input: ProductInput): Promise<ProductRecord[]> {
+  return supabaseRequest<ProductRecord[]>({
+    table: "products",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: input
+  });
+}
+
+export async function updateProduct(id: string, updates: Partial<ProductInput>): Promise<ProductRecord[]> {
+  const query = new URLSearchParams({ id: `eq.${id}` });
+  return supabaseRequest<ProductRecord[]>({
+    table: "products",
+    method: "PATCH",
+    query,
+    headers: { Prefer: "return=representation" },
+    body: updates
+  });
+}
+
+export async function getCompetitorPrices(productId: string): Promise<CompetitorPriceRecord[]> {
+  const query = new URLSearchParams({ select: "*", product_id: `eq.${productId}`, order: "last_checked_at.desc" });
+  return supabaseRequest<CompetitorPriceRecord[]>({ table: "competitor_prices", query });
+}
+
+export async function insertCompetitorPrice(input: CompetitorPriceInput): Promise<CompetitorPriceRecord[]> {
+  return supabaseRequest<CompetitorPriceRecord[]>({
+    table: "competitor_prices",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: input
+  });
+}
+
+export async function addProductNote(input: { product_id: string; note: string; owner?: string; workflow_status?: string; }): Promise<ProductNoteRecord[]> {
+  return supabaseRequest<ProductNoteRecord[]>({
+    table: "product_notes",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: input
+  });
+}
+
+export async function insertPriceHistory(input: { product_id: string; competitor_name: string; price?: number; checked_at?: string; }): Promise<PriceHistoryRecord[]> {
+  return supabaseRequest<PriceHistoryRecord[]>({ table: "price_history", method: "POST", headers: { Prefer: "return=representation" }, body: input });
+}
