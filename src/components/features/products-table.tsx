@@ -11,6 +11,8 @@ import { CompetitorListing, TrackedProductRow } from "@/types/pricing";
 
 interface RefreshSummary { succeeded: number; failed: number; suspicious: number; }
 interface ProductForm { sku: string; name: string; brand: string; buyer: string; supplier: string; department: string; bents_price: number; cost_price: string; product_url: string; }
+interface DuplicateSkuInfo { sourceProductId: string; targetProductId: string; targetSku: string; targetName: string; }
+interface MergeSummary { movedCompetitorCount: number; skippedDuplicateCompetitorCount: number; movedNotesCount: number; movedHistoryCount: number; sourceDeleted: boolean; }
 type ProductFormTextKey = "sku" | "name" | "brand" | "buyer" | "supplier" | "department" | "product_url" | "cost_price";
 
 const competitorStatusLabel = (c: CompetitorListing) => {
@@ -31,6 +33,9 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [duplicateSku, setDuplicateSku] = useState<DuplicateSkuInfo | null>(null);
+  const [mergeSummary, setMergeSummary] = useState<MergeSummary | null>(null);
+  const [merging, setMerging] = useState(false);
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
   const values = useMemo(() => uniqueValues(rows), [rows]);
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
@@ -59,6 +64,8 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     setCompetitorForm(selected.competitorListings);
     setEditMode(false);
     setSaveMessage("");
+    setDuplicateSku(null);
+    setMergeSummary(null);
   }, [selected]);
 
   const setSummaryMessage = (summary: RefreshSummary) => {
@@ -90,6 +97,8 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     if (!selected || !productForm) return;
     setSaving(true);
     setSaveMessage("");
+    setDuplicateSku(null);
+    setMergeSummary(null);
     try {
       const productResponse = await fetch("/api/products", {
         method: "PUT",
@@ -110,9 +119,14 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
         })
       });
 
+      const productPayload = await productResponse.json();
       if (!productResponse.ok) {
-        const payload = await productResponse.json();
-        setSaveMessage(payload.error ?? "Failed to save product");
+        if (productPayload.code === "DUPLICATE_SKU" && productPayload.duplicate) {
+          setDuplicateSku(productPayload.duplicate);
+          setSaveMessage(productPayload.error ?? "That SKU already exists on another product.");
+          return;
+        }
+        setSaveMessage(productPayload.error ?? "Failed to save product");
         return;
       }
 
@@ -146,6 +160,35 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     }
   };
 
+  const runMergeIntoTarget = async () => {
+    if (!duplicateSku) return;
+    setMerging(true);
+    try {
+      const response = await fetch("/api/products", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceProductId: duplicateSku.sourceProductId,
+          targetProductId: duplicateSku.targetProductId
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setSaveMessage(payload.error ?? "Failed to merge products");
+        return;
+      }
+
+      setMergeSummary(payload.data);
+      setDuplicateSku(null);
+      setEditMode(false);
+      await onRefreshDone();
+      setSelectedId(duplicateSku.targetProductId);
+      setSaveMessage("Merge completed successfully.");
+    } finally {
+      setMerging(false);
+    }
+  };
+
   const downloadCsv = () => {
     const blob = new Blob([exportProductsCsv(filteredRows)], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -167,6 +210,7 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
       </CardContent></Card>
       <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{filteredRows.length} products</p><div className="flex gap-2"><Button onClick={downloadCsv}>Export CSV</Button><Button onClick={() => runRefresh(selectedIds)} disabled={refreshing || !selectedIds.length}>Refresh selected rows</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
       {message && <p className="text-sm text-slate-700">{message}</p>}
+
       <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel">
         <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600"><th className="px-3 py-2"></th>{["SKU","Product","Buyer","Bents","Competitor","Diff","Status","Workflow"].map((h)=><th key={h} className="px-3 py-2">{h}</th>)}</tr></thead>
           <tbody>{filteredRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""}`} onClick={() => setSelectedId(r.id)}>
@@ -207,7 +251,19 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
 
             <p><b>Action owner:</b> {selected.actionOwner} | <b>Internal note:</b> {selected.internalNote || "No note yet"}</p>
             {saveMessage && <p className="text-sm text-slate-700">{saveMessage}</p>}
-            {editMode && <div className="flex gap-2"><Button onClick={saveEdits} disabled={saving}>{saving ? "Saving..." : "Save changes"}</Button><Button className="bg-slate-500" onClick={() => { setEditMode(false); setProductForm(null); setCompetitorForm([]); setSelectedId(selected.id); }}>Cancel</Button></div>}
+            {duplicateSku && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm">
+                <p>SKU <b>{duplicateSku.targetSku}</b> already exists on <b>{duplicateSku.targetName}</b>. Choose merge to reassign competitor listings to the existing product.</p>
+                <div className="flex gap-2">
+                  <Button className="bg-amber-700" onClick={runMergeIntoTarget} disabled={merging}>{merging ? "Merging..." : "Merge into existing SKU"}</Button>
+                  <Button className="bg-slate-500" onClick={() => setDuplicateSku(null)} disabled={merging}>Cancel merge</Button>
+                </div>
+              </div>
+            )}
+            {mergeSummary && (
+              <p className="text-sm text-emerald-700">Merged successfully: moved {mergeSummary.movedCompetitorCount} competitor listings, skipped {mergeSummary.skippedDuplicateCompetitorCount} duplicates, moved {mergeSummary.movedNotesCount} notes and {mergeSummary.movedHistoryCount} history rows. {mergeSummary.sourceDeleted ? "Source product removed." : "Source product retained because linked records remain."}</p>
+            )}
+            {editMode && <div className="flex gap-2"><Button onClick={saveEdits} disabled={saving}>{saving ? "Saving..." : "Save changes"}</Button><Button className="bg-slate-500" onClick={() => { setEditMode(false); setProductForm(null); setCompetitorForm([]); setSelectedId(selected.id); setDuplicateSku(null); }}>Cancel</Button></div>}
           </div>
         <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={selected.history.slice(0, 12).reverse().map((p) => ({ day: new Date(p.checkedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }), bents: p.bentsPrice, competitor: p.competitorPrice ?? 0 }))}><XAxis dataKey="day" hide /><YAxis hide /><Tooltip /><Line type="monotone" dataKey="bents" stroke="#2563eb" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="competitor" stroke="#16a34a" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div>
       </CardContent></Card>}

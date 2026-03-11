@@ -43,6 +43,17 @@ interface CompetitorPriceRecord {
 interface ProductNoteRecord { id: string; note: string; owner: string | null; workflow_status: string | null; created_at: string; }
 interface PriceHistoryRecord { id: string; competitor_name: string; price: number | null; checked_at: string; }
 
+
+interface MergeProductsSummary {
+  sourceProductId: string;
+  targetProductId: string;
+  movedCompetitorCount: number;
+  skippedDuplicateCompetitorCount: number;
+  movedNotesCount: number;
+  movedHistoryCount: number;
+  sourceDeleted: boolean;
+}
+
 export interface ProductInput {
   sku: string;
   name: string;
@@ -256,4 +267,88 @@ export async function addProductNote(input: { product_id: string; note: string; 
 
 export async function insertPriceHistory(input: { product_id: string; competitor_name: string; price?: number | null; checked_at?: string; }): Promise<PriceHistoryRecord[]> {
   return supabaseRequest<PriceHistoryRecord[]>({ table: "price_history", method: "POST", headers: { Prefer: "return=representation" }, body: input });
+}
+
+export async function findProductBySku(sku: string): Promise<ProductRecord | null> {
+  const query = new URLSearchParams({ select: "*", sku: `eq.${sku}`, limit: "1" });
+  const rows = await supabaseRequest<ProductRecord[]>({ table: "products", query });
+  return rows[0] ?? null;
+}
+
+export async function deleteProduct(id: string): Promise<void> {
+  const query = new URLSearchParams({ id: `eq.${id}` });
+  await supabaseRequest<unknown[]>({
+    table: "products",
+    method: "DELETE",
+    query
+  });
+}
+
+export async function mergeProducts(sourceProductId: string, targetProductId: string): Promise<MergeProductsSummary> {
+  const sourceCompetitors = await getCompetitorPrices(sourceProductId);
+  const targetCompetitors = await getCompetitorPrices(targetProductId);
+
+  const targetCompetitorKeys = new Set(
+    targetCompetitors.map((row) => `${row.competitor_name.toLowerCase()}::${(row.competitor_url ?? "").toLowerCase()}`)
+  );
+
+  let movedCompetitorCount = 0;
+  let skippedDuplicateCompetitorCount = 0;
+
+  for (const sourceRow of sourceCompetitors) {
+    const key = `${sourceRow.competitor_name.toLowerCase()}::${(sourceRow.competitor_url ?? "").toLowerCase()}`;
+    if (targetCompetitorKeys.has(key)) {
+      skippedDuplicateCompetitorCount += 1;
+      continue;
+    }
+
+    await updateCompetitorPrice(sourceRow.id, { product_id: targetProductId });
+    targetCompetitorKeys.add(key);
+    movedCompetitorCount += 1;
+  }
+
+  const notesToMove = await supabaseRequest<ProductNoteRecord[]>({
+    table: "product_notes",
+    query: new URLSearchParams({ select: "*", product_id: `eq.${sourceProductId}` })
+  });
+  for (const note of notesToMove) {
+    await supabaseRequest<ProductNoteRecord[]>({
+      table: "product_notes",
+      method: "PATCH",
+      query: new URLSearchParams({ id: `eq.${note.id}` }),
+      headers: { Prefer: "return=representation" },
+      body: { product_id: targetProductId }
+    });
+  }
+
+  const historyToMove = await supabaseRequest<PriceHistoryRecord[]>({
+    table: "price_history",
+    query: new URLSearchParams({ select: "*", product_id: `eq.${sourceProductId}` })
+  });
+  for (const historyRow of historyToMove) {
+    await supabaseRequest<PriceHistoryRecord[]>({
+      table: "price_history",
+      method: "PATCH",
+      query: new URLSearchParams({ id: `eq.${historyRow.id}` }),
+      headers: { Prefer: "return=representation" },
+      body: { product_id: targetProductId }
+    });
+  }
+
+  const remainingCompetitors = await getCompetitorPrices(sourceProductId);
+  let sourceDeleted = false;
+  if (!remainingCompetitors.length) {
+    await deleteProduct(sourceProductId);
+    sourceDeleted = true;
+  }
+
+  return {
+    sourceProductId,
+    targetProductId,
+    movedCompetitorCount,
+    skippedDuplicateCompetitorCount,
+    movedNotesCount: notesToMove.length,
+    movedHistoryCount: historyToMove.length,
+    sourceDeleted
+  };
 }
