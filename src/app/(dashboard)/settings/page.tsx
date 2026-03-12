@@ -36,7 +36,7 @@ export default function SettingsPage() {
   const [editingBuyerId, setEditingBuyerId] = useState<string | null>(null);
   const [editingDepartmentId, setEditingDepartmentId] = useState<string | null>(null);
   const [editingCompetitorId, setEditingCompetitorId] = useState<string | null>(null);
-  const [openSection, setOpenSection] = useState<"buyers" | "departments" | "competitors" | null>("buyers");
+  const [openSection, setOpenSection] = useState<"buyers" | "departments" | "competitors" | null>(null);
 
   const load = useCallback(async () => {
     const response = await fetch("/api/settings", { cache: "no-store" });
