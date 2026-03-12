@@ -21,7 +21,8 @@ export async function GET(request: NextRequest) {
 
   try {
     console.info("[cron] competitor-check started");
-    const summary = await runCompetitorRefresh();
+    const mode = (request.nextUrl.searchParams.get("mode") as "priority" | "daily" | null) ?? "daily";
+    const summary = await runCompetitorRefresh({ scheduleMode: mode, triggerSource: "cron" });
     console.info("[cron] competitor-check finished", summary);
     return NextResponse.json({ data: summary });
   } catch (error) {

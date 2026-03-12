@@ -42,7 +42,22 @@ interface CompetitorPriceRecord {
 }
 
 interface ProductNoteRecord { id: string; note: string; owner: string | null; workflow_status: string | null; created_at: string; }
-interface PriceHistoryRecord { id: string; competitor_name: string; price: number | null; checked_at: string; }
+interface PriceHistoryRecord {
+  id: string;
+  competitor_name: string;
+  competitor_url?: string | null;
+  competitor_price_id?: string | null;
+  price: number | null;
+  current_price?: number | null;
+  promo_price?: number | null;
+  was_price?: number | null;
+  checked_at: string;
+  captured_at?: string | null;
+  last_check_status?: string | null;
+  suspicious_change_flag?: boolean | null;
+  extraction_source?: string | null;
+  extraction_metadata?: Record<string, unknown> | null;
+}
 
 interface BuyerRecord { id: string; name: string; is_active: boolean; created_at: string; updated_at: string; }
 interface DepartmentRecord { id: string; name: string; created_at: string; updated_at: string; }
@@ -254,9 +269,9 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
       createdAt: n.created_at
     })),
     history: (product.price_history ?? []).map((h) => ({
-      checkedAt: h.checked_at,
+      checkedAt: h.captured_at ?? h.checked_at,
       bentsPrice: Number(product.bents_price ?? 0),
-      competitorPrice: h.price
+      competitorPrice: h.current_price ?? h.price
     }))
   };
 }
@@ -367,7 +382,22 @@ export async function addProductNotesBulk(inputs: Array<{ product_id: string; no
   });
 }
 
-export async function insertPriceHistory(input: { product_id: string; competitor_name: string; price?: number | null; checked_at?: string; }): Promise<PriceHistoryRecord[]> {
+export async function insertPriceHistory(input: {
+  product_id: string;
+  competitor_name: string;
+  competitor_url?: string;
+  competitor_price_id?: string;
+  price?: number | null;
+  current_price?: number | null;
+  promo_price?: number | null;
+  was_price?: number | null;
+  checked_at?: string;
+  captured_at?: string;
+  last_check_status?: CheckStatus;
+  suspicious_change_flag?: boolean;
+  extraction_source?: string;
+  extraction_metadata?: Record<string, unknown>;
+}): Promise<PriceHistoryRecord[]> {
   return supabaseRequest<PriceHistoryRecord[]>({ table: "price_history", method: "POST", headers: { Prefer: "return=representation" }, body: input });
 }
 

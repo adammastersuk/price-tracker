@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { addProductNotesBulk } from "@/lib/db";
 import { WorkflowStatus } from "@/types/pricing";
+import { logActivity } from "@/lib/operations";
 
 const allowedStatuses: WorkflowStatus[] = ["Open", "Monitoring", "Reviewed", "No Action", "Closed", "In Review", "Awaiting Supplier", "Resolved"];
 
@@ -21,6 +22,7 @@ export async function POST(request: NextRequest) {
         note: `Bulk update: owner assigned to ${owner}`,
         owner
       })));
+      await logActivity({ event_type: "bulk_action", entity_type: "product", summary: `Bulk owner assignment to ${owner} for ${productIds.length} products.`, metadata: { action, productIds, owner } });
       return NextResponse.json({ data: { updated: productIds.length } });
     }
 
@@ -34,6 +36,7 @@ export async function POST(request: NextRequest) {
         note: `Bulk update: workflow status set to ${workflowStatus}`,
         workflow_status: workflowStatus
       })));
+      await logActivity({ event_type: "bulk_action", entity_type: "product", summary: `Bulk workflow set to ${workflowStatus} for ${productIds.length} products.`, metadata: { action, productIds, workflowStatus } });
       return NextResponse.json({ data: { updated: productIds.length } });
     }
 
@@ -43,6 +46,7 @@ export async function POST(request: NextRequest) {
         note: "Bulk update: marked as reviewed",
         workflow_status: "Reviewed"
       })));
+      await logActivity({ event_type: "bulk_action", entity_type: "product", summary: `Bulk mark reviewed for ${productIds.length} products.`, metadata: { action, productIds } });
       return NextResponse.json({ data: { updated: productIds.length } });
     }
 

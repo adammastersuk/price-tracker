@@ -7,7 +7,9 @@ export async function POST(request: NextRequest) {
     const summary = await runCompetitorRefresh({
       productIds: payload.productIds,
       competitorListingIds: payload.competitorListingIds,
-      batchSize: payload.batchSize
+      batchSize: payload.batchSize,
+      scheduleMode: payload.scheduleMode ?? "manual",
+      triggerSource: "manual"
     });
 
     return NextResponse.json({ data: summary });
