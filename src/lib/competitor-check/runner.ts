@@ -11,6 +11,7 @@ import { selectAdapter } from "@/lib/competitor-check/adapters";
 
 export interface RefreshOptions {
   productIds?: string[];
+  competitorListingIds?: string[];
   batchSize?: number;
 }
 
@@ -90,7 +91,7 @@ function suspiciousReason(target: RefreshTarget, result: Awaited<ReturnType<Retu
   return reasons;
 }
 
-async function buildTargets(productIds?: string[]): Promise<RefreshTarget[]> {
+async function buildTargets(productIds?: string[], competitorListingIds?: string[]): Promise<RefreshTarget[]> {
   const products = await getProducts();
   const filtered = productIds?.length ? products.filter((p) => productIds.includes(p.id)) : products;
 
@@ -112,6 +113,9 @@ async function buildTargets(productIds?: string[]): Promise<RefreshTarget[]> {
       continue;
     }
     for (const mapping of mappings) {
+      if (competitorListingIds?.length && !competitorListingIds.includes(mapping.id)) {
+        continue;
+      }
       targets.push({
         productId: product.id,
         sku: product.internalSku,
@@ -209,7 +213,7 @@ async function saveFailure(target: RefreshTarget, reason: string) {
 }
 
 export async function runCompetitorRefresh(options: RefreshOptions = {}): Promise<RefreshSummary> {
-  const targets = await buildTargets(options.productIds);
+  const targets = await buildTargets(options.productIds, options.competitorListingIds);
   const failures: RefreshFailure[] = [];
   let processed = 0;
   let succeeded = 0;

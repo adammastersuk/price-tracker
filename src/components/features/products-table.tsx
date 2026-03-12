@@ -7,7 +7,7 @@ import { defaultFilters, queryProducts, uniqueValues } from "@/lib/data-service"
 import { exportProductsCsv } from "@/lib/csv";
 import { currency, pct } from "@/lib/utils";
 import { materialGap } from "@/lib/pricing-logic";
-import { CompetitorListing, TrackedProductRow } from "@/types/pricing";
+import { CompetitorListing, CompetitorStockStatus, TrackedProductRow } from "@/types/pricing";
 
 interface RefreshSummary { succeeded: number; failed: number; suspicious: number; }
 interface ProductForm { sku: string; name: string; brand: string; buyer: string; supplier: string; department: string; bents_price: number; cost_price: string; product_url: string; }
@@ -17,15 +17,32 @@ type ProductFormTextKey = "sku" | "name" | "brand" | "buyer" | "supplier" | "dep
 type SortKey = "sku" | "product" | "buyer" | "bents" | "competitor" | "diff" | "status" | "workflow";
 type SortDirection = "asc" | "desc";
 
-const competitorStatusLabel = (c: CompetitorListing) => {
-  if (c.lastCheckStatus === "pending") return "Pending check";
-  if (c.lastCheckStatus === "failed") return "Failed extraction";
-  if (c.lastCheckStatus === "suspicious") {
-    const retained = c.checkErrorMessage.toLowerCase().includes("retained");
-    return retained ? "Rejected low-confidence price (previous valid retained)" : "Suspicious extraction";
+const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
+  success: "bg-emerald-100 text-emerald-800",
+  suspicious: "bg-amber-100 text-amber-800",
+  failed: "bg-rose-100 text-rose-700",
+  pending: "bg-slate-100 text-slate-700"
+};
+
+const stockOptions: CompetitorStockStatus[] = ["In Stock", "Low Stock", "Out of Stock", "Unknown"];
+
+const statusText = (status: CompetitorListing["lastCheckStatus"]) => {
+  if (status === "success") return "Success";
+  if (status === "suspicious") return "Suspicious";
+  if (status === "failed") return "Failed";
+  return "Pending";
+};
+
+const trustNote = (listing: CompetitorListing) => {
+  if (listing.lastCheckStatus === "suspicious") {
+    const retained = listing.checkErrorMessage.toLowerCase().includes("retained");
+    return retained
+      ? "Price candidate rejected and previous valid value retained for review."
+      : "Extractor flagged this result as suspicious. Review before acting.";
   }
-  if (c.competitorCurrentPrice === null) return "No price yet";
-  return currency(c.competitorCurrentPrice);
+  if (listing.lastCheckStatus === "failed") return "Latest extraction failed. Last known values may be stale.";
+  if (listing.lastCheckStatus === "pending") return "Awaiting extraction check.";
+  return "Price extracted successfully.";
 };
 
 const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
@@ -51,6 +68,29 @@ const competitorSummary = (row: TrackedProductRow) => {
   return { primary: "No valid price", secondary: row.competitorName === "No competitor" ? "" : row.competitorName, extra: "" };
 };
 
+const competitorBadges = (row: TrackedProductRow) => {
+  const suspicious = row.competitorListings.filter((c) => c.lastCheckStatus === "suspicious").length;
+  const checked = row.competitorListings.filter((c) => c.lastCheckStatus === "success").length;
+  const valid = row.competitorListings.filter((c) => c.lastCheckStatus === "success" && c.competitorCurrentPrice !== null && c.extractionMetadata?.trust_rejected !== true);
+  return {
+    hasLowest: valid.length > 0,
+    suspicious,
+    checked
+  };
+};
+
+const formatDiff = (listing: CompetitorListing) => {
+  const diff = listing.priceDifferenceGbp;
+  const pctDiff = listing.priceDifferencePercent;
+  if (diff === null || pctDiff === null) return { line1: "No difference available", line2: "", tone: "text-slate-600" };
+  if (Math.abs(diff) < 0.005) return { line1: "£0.00 difference", line2: "In line with Bents", tone: "text-slate-700" };
+
+  const direction = diff > 0 ? "cheaper" : "above";
+  const line1 = `${currency(Math.abs(diff))} ${direction === "cheaper" ? "cheaper than Bents" : "above Bents"}`;
+  const line2 = `${Math.abs(pctDiff).toFixed(1)}% ${direction === "cheaper" ? "below" : "above"} Bents`;
+  return { line1, line2, tone: direction === "cheaper" ? "text-emerald-700" : "text-rose-700" };
+};
+
 export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; }) {
   const [filters, setFilters] = useState(defaultFilters);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -65,6 +105,7 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
   const [merging, setMerging] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("sku");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [editingCompetitorId, setEditingCompetitorId] = useState<string | null>(null);
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
   const sortedRows = useMemo(() => {
     const direction = sortDirection === "asc" ? 1 : -1;
@@ -96,8 +137,9 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
   const [competitorForm, setCompetitorForm] = useState<CompetitorListing[]>([]);
 
   useEffect(() => {
-    if (!selectedId && rows.length) {
-      setSelectedId(rows[0].id);
+    if (!selectedId && rows.length) setSelectedId(rows[0].id);
+    if (selectedId && rows.length && !rows.some((row) => row.id === selectedId)) {
+      setSelectedId(rows[0]?.id ?? null);
     }
   }, [rows, selectedId]);
 
@@ -116,6 +158,7 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     });
     setCompetitorForm(selected.competitorListings);
     setEditMode(false);
+    setEditingCompetitorId(null);
     setSaveMessage("");
     setDuplicateSku(null);
     setMergeSummary(null);
@@ -125,14 +168,14 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     setMessage(`Refresh complete: ${summary.succeeded} success, ${summary.failed} failed, ${summary.suspicious} suspicious changes.`);
   };
 
-  const runRefresh = async (productIds?: string[]) => {
+  const runRefresh = async (productIds?: string[], competitorListingIds?: string[]) => {
     setRefreshing(true);
     setMessage("");
     try {
       const response = await fetch("/api/competitor/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds })
+        body: JSON.stringify({ productIds, competitorListingIds })
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -144,6 +187,37 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const deleteCompetitor = async (competitorId: string) => {
+    if (!selected) return;
+    if (!window.confirm("Delete this competitor listing? This cannot be undone.")) return;
+
+    const response = await fetch(`/api/competitor?id=${competitorId}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSaveMessage(payload.error ?? "Failed to delete competitor listing.");
+      return;
+    }
+    setSaveMessage("Competitor listing deleted.");
+    await onRefreshDone();
+  };
+
+  const deleteProductRow = async () => {
+    if (!selected) return;
+    const ok = window.confirm("Delete this product and all linked competitor data? This cannot be undone.");
+    if (!ok) return;
+
+    const response = await fetch(`/api/products?id=${selected.id}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSaveMessage(payload.error ?? "Failed to delete product.");
+      return;
+    }
+
+    setSaveMessage("Product deleted.");
+    await onRefreshDone();
+    setSelectedId(null);
   };
 
   const saveEdits = async () => {
@@ -183,34 +257,37 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
         return;
       }
 
-      for (const competitor of competitorForm) {
-        const response = await fetch("/api/competitor", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: competitor.id,
-            updates: {
-              competitor_name: competitor.competitorName,
-              competitor_url: competitor.competitorProductUrl,
-              competitor_current_price: competitor.competitorCurrentPrice,
-              competitor_promo_price: competitor.competitorPromoPrice,
-              competitor_stock_status: competitor.competitorStockStatus
-            }
-          })
-        });
-        if (!response.ok) {
-          const payload = await response.json();
-          setSaveMessage(payload.error ?? "Failed to save competitor row");
-          return;
-        }
-      }
-
       await onRefreshDone();
       setEditMode(false);
-      setSaveMessage("Saved successfully.");
+      setSaveMessage("Product saved successfully.");
     } finally {
       setSaving(false);
     }
+  };
+
+  const saveCompetitorEdit = async (competitor: CompetitorListing) => {
+    const response = await fetch("/api/competitor", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: competitor.id,
+        updates: {
+          competitor_name: competitor.competitorName,
+          competitor_url: competitor.competitorProductUrl,
+          competitor_current_price: competitor.competitorCurrentPrice,
+          competitor_promo_price: competitor.competitorPromoPrice,
+          competitor_stock_status: competitor.competitorStockStatus
+        }
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSaveMessage(payload.error ?? "Failed to save competitor listing.");
+      return;
+    }
+    setEditingCompetitorId(null);
+    setSaveMessage("Competitor listing updated.");
+    await onRefreshDone();
   };
 
   const runMergeIntoTarget = async () => {
@@ -285,13 +362,18 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
             <td className="px-3 py-2">{(() => {
               const summary = competitorSummary(r);
-              return <><p className="font-semibold text-slate-900">{summary.primary}</p>{summary.secondary && <p className="text-xs text-slate-600">{summary.secondary}</p>}{summary.extra && <p className="text-xs text-slate-500">{summary.extra}</p>}</>;
+              const badges = competitorBadges(r);
+              return <><p className="font-semibold text-slate-900">{summary.primary}</p>{summary.secondary && <p className="text-xs text-slate-600">{summary.secondary}</p>}
+                <div className="mt-1 flex flex-wrap gap-1 text-[11px]">{badges.hasLowest && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">Lowest valid</span>}
+                  {badges.suspicious > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">{badges.suspicious} suspicious</span>}
+                  {badges.checked > 0 && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">{badges.checked} checked</span>}</div>
+                {summary.extra && <p className="text-xs text-slate-500">{summary.extra}</p>}</>;
             })()}</td>
             <td className="px-3 py-2">{r.priceDifferencePercent !== null ? pct(r.priceDifferencePercent) : "-"}</td><td className="px-3 py-2"><PricingStatusChip status={r.pricingStatus} /></td>
             <td className="px-3 py-2"><WorkflowChip status={r.actionWorkflowStatus} /></td></tr>)}</tbody>
         </table>
       </div>
-      {selected && productForm && <Card><CardContent className="grid gap-5 lg:grid-cols-3"><div className="lg:col-span-2 space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button></div></div><p className="text-sm text-slate-600">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement.</p>
+      {selected && productForm && <Card><CardContent className="grid gap-5 lg:grid-cols-3"><div className="lg:col-span-2 space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-slate-600">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
 
             {editMode ? <div className="grid gap-2 md:grid-cols-2">{[
               ["SKU", "sku"], ["Product name", "name"], ["Brand", "brand"], ["Buyer", "buyer"], ["Supplier", "supplier"], ["Department", "department"], ["Bents URL", "product_url"], ["Cost price", "cost_price"]
@@ -299,23 +381,59 @@ export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow
               const formKey = key as ProductFormTextKey;
               return <label key={key} className="text-xs text-slate-600">{label}<Input value={productForm[formKey] ?? ""} onChange={(e) => setProductForm((prev) => prev ? { ...prev, [formKey]: e.target.value } : prev)} /></label>;
             })}<label className="text-xs text-slate-600">Bents price<Input type="number" step="0.01" value={productForm.bents_price} onChange={(e) => setProductForm((prev) => prev ? { ...prev, bents_price: Number(e.target.value) } : prev)} /></label></div> : <>
-              <p><b>Margin:</b> {marginLabel(selected)} | <b>Stock:</b> {selected.competitorStockStatus}</p><p><b>Latest check:</b> {new Date(selected.lastCheckedAt).toLocaleString()} ({selected.lastCheckStatus})</p><p><b>Previous price:</b> {selected.history[1]?.competitorPrice ? currency(selected.history[1].competitorPrice) : "N/A"} | <b>Source:</b> {selected.extractionSource || "n/a"}</p><p><b>Error:</b> {selected.checkErrorMessage || "None"}</p>
+              <p><b>Margin:</b> {marginLabel(selected)} | <b>Latest check:</b> {new Date(selected.lastCheckedAt).toLocaleString()}</p>
             </>}
 
-            <div className="rounded-lg border p-3 space-y-3"><p className="font-medium">Competitor listings ({selected.competitorCount})</p>
-              {competitorForm.map((c, index) => <div key={c.id} className="rounded border p-2 space-y-2"><div className="grid gap-2 md:grid-cols-2">{editMode ? <>
-                <label className="text-xs">Competitor name<Input value={c.competitorName} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorName: e.target.value } : x))} /></label>
-                <label className="text-xs">Competitor URL<Input value={c.competitorProductUrl} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorProductUrl: e.target.value } : x))} /></label>
-                <label className="text-xs">Current price<Input type="number" step="0.01" value={c.competitorCurrentPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorCurrentPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
-                <label className="text-xs">Promo price<Input type="number" step="0.01" value={c.competitorPromoPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorPromoPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
-              </> : <>
-                <p><b>{index + 1}. {c.competitorName}</b></p>
-                <p className="text-xs text-slate-600">{competitorStatusLabel(c)} | {c.lastCheckStatus} | checked {new Date(c.lastCheckedAt).toLocaleString()}</p>
-                <p className="text-xs text-slate-600">{c.competitorProductUrl}</p>
-                <p className="text-xs">Promo: {c.competitorPromoPrice !== null ? currency(c.competitorPromoPrice) : "-"} | Prev valid: {c.competitorWasPrice !== null ? currency(c.competitorWasPrice) : "-"}</p>
-                <p className="text-xs">Raw extraction: {c.rawPriceText || "none"}</p>
-                <p className="text-xs text-amber-700">{c.checkErrorMessage || ""}</p>
-              </>}</div></div>)}
+            <div className="rounded-lg border p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
+              {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-slate-600">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
+              <div className="grid gap-3 md:grid-cols-2">
+                {competitorForm.map((c) => {
+                  const diff = formatDiff(c);
+                  const isEditing = editingCompetitorId === c.id;
+                  return <div key={c.id} className="rounded-lg border p-3 space-y-3 bg-white">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-3xl font-bold leading-none">{c.competitorCurrentPrice !== null ? currency(c.competitorCurrentPrice) : "No price"}</p>
+                        <p className="text-sm text-slate-600 mt-1">{c.competitorName}</p>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}>{statusText(c.lastCheckStatus)}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
+                      <p><b>Was:</b> {c.competitorWasPrice !== null ? currency(c.competitorWasPrice) : "-"}</p>
+                      <p className={c.competitorPromoPrice !== null ? "font-semibold text-amber-700" : ""}><b>Promo:</b> {c.competitorPromoPrice !== null ? currency(c.competitorPromoPrice) : "-"}</p>
+                      <p><b>Stock:</b> {c.competitorStockStatus}</p>
+                      <p><b>Checked:</b> {new Date(c.lastCheckedAt).toLocaleString()}</p>
+                      <p className={`col-span-2 ${diff.tone}`}><b>Diff vs Bents:</b> {diff.line1}{diff.line2 ? ` · ${diff.line2}` : ""}</p>
+                      <p className="col-span-2"><b>Source:</b> {c.extractionSource || "Unknown adapter"}</p>
+                      <p className="col-span-2 text-slate-600">{trustNote(c)}</p>
+                      {c.checkErrorMessage && <p className="col-span-2 text-amber-700">{c.checkErrorMessage}</p>}
+                    </div>
+
+                    {isEditing && <div className="grid gap-2 md:grid-cols-2">
+                      <label className="text-xs">Competitor name<Input value={c.competitorName} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorName: e.target.value } : x))} /></label>
+                      <label className="text-xs">Competitor URL<Input value={c.competitorProductUrl} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorProductUrl: e.target.value } : x))} /></label>
+                      <label className="text-xs">Current price<Input type="number" step="0.01" value={c.competitorCurrentPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorCurrentPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
+                      <label className="text-xs">Promo price<Input type="number" step="0.01" value={c.competitorPromoPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorPromoPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
+                      <label className="text-xs md:col-span-2">Stock status
+                        <Select value={c.competitorStockStatus} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorStockStatus: e.target.value as CompetitorStockStatus } : x))}>
+                          {stockOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </Select>
+                      </label>
+                    </div>}
+
+                    <div className="flex flex-wrap gap-2">
+                      <a href={c.competitorProductUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200">View competitor page</a>
+                      <Button onClick={() => runRefresh(undefined, [c.id])} disabled={refreshing}>Refresh this competitor</Button>
+                      {isEditing ? <>
+                        <Button onClick={() => saveCompetitorEdit(c)}>Save</Button>
+                        <Button className="bg-slate-500" onClick={() => { setEditingCompetitorId(null); setCompetitorForm(selected.competitorListings); }}>Cancel</Button>
+                      </> : <Button className="bg-slate-700" onClick={() => setEditingCompetitorId(c.id)}>Edit competitor</Button>}
+                      <Button className="bg-rose-700" onClick={() => deleteCompetitor(c.id)}>Delete competitor</Button>
+                    </div>
+                  </div>;
+                })}
+              </div>
             </div>
 
             <p><b>Action owner:</b> {selected.actionOwner} | <b>Internal note:</b> {selected.internalNote || "No note yet"}</p>

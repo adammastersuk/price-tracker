@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createProduct, findProductBySku, getProductById, getProducts, mergeProducts, updateProduct } from "@/lib/db";
+import { createProduct, deleteProduct, findProductBySku, getProductById, getProducts, mergeProducts, updateProduct } from "@/lib/db";
 
 function isDuplicateKeyError(errorMessage: string): boolean {
   return errorMessage.includes("duplicate key") || errorMessage.includes("23505");
@@ -108,5 +108,24 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ data: summary });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const productId = request.nextUrl.searchParams.get("id");
+    if (!productId) {
+      return NextResponse.json({ error: "Product id is required" }, { status: 400 });
+    }
+
+    const existing = await getProductById(productId);
+    if (!existing) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    await deleteProduct(productId);
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: "Unable to delete product. Please try again." }, { status: 500 });
   }
 }

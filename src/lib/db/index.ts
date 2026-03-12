@@ -273,6 +273,15 @@ export async function updateCompetitorPrice(id: string, updates: Partial<Competi
   });
 }
 
+export async function deleteCompetitorPrice(id: string): Promise<void> {
+  const query = new URLSearchParams({ id: `eq.${id}` });
+  await supabaseRequest<unknown[]>({
+    table: "competitor_prices",
+    method: "DELETE",
+    query
+  });
+}
+
 export async function addProductNote(input: { product_id: string; note: string; owner?: string; workflow_status?: string; }): Promise<ProductNoteRecord[]> {
   return supabaseRequest<ProductNoteRecord[]>({
     table: "product_notes",

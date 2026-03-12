@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCompetitorPrices, insertCompetitorPrice, insertPriceHistory, updateCompetitorPrice } from "@/lib/db";
+import { deleteCompetitorPrice, getCompetitorPrices, insertCompetitorPrice, insertPriceHistory, updateCompetitorPrice } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   const productId = request.nextUrl.searchParams.get("productId");
@@ -55,5 +55,19 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ data: updated[0] });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const listingId = request.nextUrl.searchParams.get("id");
+    if (!listingId) {
+      return NextResponse.json({ error: "Competitor listing id is required" }, { status: 400 });
+    }
+
+    await deleteCompetitorPrice(listingId);
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: "Unable to delete competitor listing. Please try again." }, { status: 500 });
   }
 }
