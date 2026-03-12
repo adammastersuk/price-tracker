@@ -33,7 +33,8 @@ create table if not exists public.competitor_prices (
   check_error_message text,
   raw_price_text text,
   extraction_source text,
-  suspicious_change_flag boolean not null default false
+  suspicious_change_flag boolean not null default false,
+  extraction_metadata jsonb
 );
 
 alter table if exists public.competitor_prices

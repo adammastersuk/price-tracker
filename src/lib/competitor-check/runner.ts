@@ -84,6 +84,9 @@ function suspiciousReason(target: RefreshTarget, result: Awaited<ReturnType<Retu
   if (lowConfidence(result) && nextPrice !== null) {
     reasons.push("Extractor confidence is low for the captured price token.");
   }
+  if ((result.metadata?.forced_suspicious as boolean | undefined) === true) {
+    reasons.push(String(result.metadata?.forced_suspicious_reason ?? "Adapter trust rules flagged extraction as suspicious."));
+  }
   return reasons;
 }
 
@@ -164,7 +167,15 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
       : "",
     raw_price_text: result.raw_price_text,
     extraction_source: result.extraction_source,
-    suspicious_change_flag: suspicious
+    suspicious_change_flag: suspicious,
+    extraction_metadata: {
+      ...(result.metadata ?? {}),
+      trust_rejected: suspicious,
+      accepted_current_price: acceptedCurrentPrice,
+      extracted_current_price: result.competitor_current_price,
+      trust_warnings: reasons,
+      previous_valid_price: target.previousValidPrice
+    }
   };
 
   if (target.mappingId) {
@@ -189,7 +200,11 @@ async function saveFailure(target: RefreshTarget, reason: string) {
     last_checked_at: new Date().toISOString(),
     last_check_status: "failed",
     check_error_message: reason,
-    pricing_status: "Needs review"
+    pricing_status: "Needs review",
+    extraction_metadata: {
+      trust_rejected: true,
+      failure_reason: reason
+    }
   });
 }
 
