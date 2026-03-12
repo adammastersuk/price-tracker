@@ -735,21 +735,27 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
       ".woocommerce-Price-amount.amount"
     ];
 
+    const amountClassPattern =
+      '[^"\']*(?:\bwoocommerce-Price-amount\b[^"\']*\bamount\b|\bamount\b[^"\']*\bwoocommerce-Price-amount\b)[^"\']*';
+
     const selectorPatterns: Array<{ selector: string; pattern: RegExp }> = [
       {
         selector: "p.price .woocommerce-Price-amount.amount",
-        pattern:
-          /<p[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>[\s\S]{0,400}?<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*\bamount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+        pattern: new RegExp(
+          `<p[^>]*class=["'][^"']*\\bprice\\b[^"']*["'][^>]*>[\\s\\S]{0,2000}?<span[^>]*class=["']${amountClassPattern}["'][^>]*>([\\s\\S]*?)<\\/span>`,
+          "i"
+        )
       },
       {
         selector: ".summary .price .woocommerce-Price-amount.amount",
-        pattern:
-          /<[^>]*class=["'][^"']*\bsummary\b[^"']*["'][^>]*>[\s\S]{0,2000}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>[\s\S]{0,600}?<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*\bamount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+        pattern: new RegExp(
+          `<[^>]*class=["'][^"']*\\bsummary\\b[^"']*["'][^>]*>[\\s\\S]{0,8000}?<[^>]*class=["'][^"']*\\bprice\\b[^"']*["'][^>]*>[\\s\\S]{0,3000}?<span[^>]*class=["']${amountClassPattern}["'][^>]*>([\\s\\S]*?)<\\/span>`,
+          "i"
+        )
       },
       {
         selector: ".woocommerce-Price-amount.amount",
-        pattern:
-          /<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*\bamount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+        pattern: new RegExp(`<span[^>]*class=["']${amountClassPattern}["'][^>]*>([\\s\\S]*?)<\\/span>`, "i")
       }
     ];
 
@@ -763,6 +769,18 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
       selectorsFound[selector] = Boolean(extractedText);
       if (extractedText) {
         candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
+      }
+    }
+
+    if (candidateValues.length === 0) {
+      const looseMatch = html.match(/<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+      const looseExtractedText = looseMatch?.[1] ? stripTags(looseMatch[1]) : "";
+      if (looseExtractedText) {
+        candidateValues.push({
+          source_selector: ".woocommerce-Price-amount",
+          extracted_text: looseExtractedText,
+          parsed: parseWooCommerceAmount(looseExtractedText)
+        });
       }
     }
 
