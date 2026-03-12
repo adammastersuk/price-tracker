@@ -176,7 +176,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     if (filters.competitors.length) params.set("competitors", filters.competitors.map(encodeURIComponent).join(","));
     if (filters.statuses.length) params.set("status", filters.statuses.map(encodeURIComponent).join(","));
     const query = params.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    router.replace((query ? `${pathname}?${query}` : pathname) as never, { scroll: false });
   }, [filters, pathname, router]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
