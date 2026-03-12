@@ -72,6 +72,16 @@ const trustNote = (listing: CompetitorListing) => {
 
 const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
 
+
+const competitorCardPriceLabel = (listing: CompetitorListing) => {
+  if (listing.competitorCurrentPrice !== null) return currency(listing.competitorCurrentPrice);
+  if (listing.lastCheckStatus === "failed") {
+    const msg = listing.checkErrorMessage?.trim();
+    if (msg) return msg;
+  }
+  return "No price";
+};
+
 const competitorSummary = (row: TrackedProductRow) => {
   const valid = row.competitorListings.filter((c) =>
     c.competitorCurrentPrice !== null
@@ -595,7 +605,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
                   return <div key={c.id} className="rounded-lg border p-3 space-y-3 bg-white">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="text-3xl font-bold leading-none">{c.competitorCurrentPrice !== null ? currency(c.competitorCurrentPrice) : "No price"}</p>
+                        <p className="text-3xl font-bold leading-none">{competitorCardPriceLabel(c)}</p>
                         <p className="text-sm text-slate-600 mt-1">{c.competitorName}</p>
                       </div>
                       <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}>{statusText(c.lastCheckStatus)}</span>
