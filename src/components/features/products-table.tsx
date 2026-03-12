@@ -10,6 +10,7 @@ import { exportProductsCsv } from "@/lib/csv";
 import { currency, pct } from "@/lib/utils";
 import { materialGap } from "@/lib/pricing-logic";
 import { CompetitorListing, CompetitorStockStatus, TrackedProductRow } from "@/types/pricing";
+import { safeReadJsonResponse } from "@/lib/json";
 
 interface RefreshSummary { succeeded: number; failed: number; suspicious: number; }
 interface ProductForm { sku: string; name: string; brand: string; buyer: string; supplier: string; department: string; bents_price: number; cost_price: string; product_url: string; }
@@ -68,6 +69,12 @@ const trustNote = (listing: CompetitorListing) => {
   if (listing.lastCheckStatus === "failed") return "Latest extraction failed. Last known values may be stale.";
   if (listing.lastCheckStatus === "pending") return "Awaiting extraction check.";
   return "Price extracted successfully.";
+};
+
+const diagnosticsWarnings = (listing: CompetitorListing): string[] => {
+  const warnings = listing.extractionMetadata?.trust_warnings;
+  if (!Array.isArray(warnings)) return [];
+  return warnings.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 };
 
 const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
@@ -302,12 +309,12 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productIds, competitorListingIds })
       });
-      const payload = await response.json();
+      const payload = await safeReadJsonResponse<{ data?: RefreshSummary; error?: string }>(response, {});
       if (!response.ok) {
-        setMessage(`Refresh failed: ${payload.error ?? "Unknown error"}`);
+        setMessage(`Refresh failed: ${payload.error ?? "Unable to complete refresh."}`);
         return;
       }
-      setSummaryMessage(payload.data);
+      setSummaryMessage(payload.data ?? { succeeded: 0, failed: 0, suspicious: 0 });
       await onRefreshDone();
     } finally {
       setRefreshing(false);
@@ -619,6 +626,9 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
                       <p className={`col-span-2 ${diff.tone}`}><b>Diff vs Bents:</b> {diff.line1}{diff.line2 ? ` · ${diff.line2}` : ""}</p>
                       <p className="col-span-2"><b>Source:</b> {c.extractionSource || "Unknown adapter"}</p>
                       <p className="col-span-2 text-slate-600">{trustNote(c)}</p>
+                      <p className="col-span-2 text-xs text-slate-500">
+                        <b>Diagnostics:</b> {diagnosticsWarnings(c).length ? diagnosticsWarnings(c).join(" ") : "No diagnostics available"}
+                      </p>
                       {c.checkErrorMessage && <p className="col-span-2 text-amber-700">{c.checkErrorMessage}</p>}
                     </div>
 

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DashboardCards } from "@/components/features/dashboard-cards";
 import { PricingStatusChip, WorkflowChip } from "@/components/features/status-chip";
 import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
+import { safeReadJsonResponse } from "@/lib/json";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select } from "@/components/ui/primitives";
 import {
   dashboardStats,
@@ -114,7 +115,7 @@ export default function DashboardPage() {
       body: JSON.stringify({ productIds: [productId] })
     });
     const response = await fetch("/api/products", { cache: "no-store" });
-    const payload = await response.json();
+    const payload = await safeReadJsonResponse<{ data?: TrackedProductRow[] }>(response, {});
     setRows(payload.data ?? []);
     setRefreshingId(null);
   };

@@ -1,5 +1,6 @@
 import { CheckStatus, CompetitorListing, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
+import { toNullablePlainObject, toPlainObject } from "@/lib/json";
 
 interface ProductRecord {
   id: string;
@@ -201,7 +202,7 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     rawPriceText: comp.raw_price_text ?? "",
     extractionSource: comp.extraction_source ?? "",
     suspiciousChangeFlag: comp.suspicious_change_flag ?? false,
-    extractionMetadata: comp.extraction_metadata ?? {},
+    extractionMetadata: toPlainObject(comp.extraction_metadata, {}),
     priceDifferenceGbp: comp.price_difference_gbp ?? null,
     priceDifferencePercent: comp.price_difference_percent ?? null,
     pricingStatus: (comp.pricing_status as PricingStatus) ?? "Needs review"
@@ -328,7 +329,7 @@ export async function insertCompetitorPrice(input: CompetitorPriceInput): Promis
     table: "competitor_prices",
     method: "POST",
     headers: { Prefer: "return=representation" },
-    body: input
+    body: { ...input, extraction_metadata: toNullablePlainObject(input.extraction_metadata) }
   });
 }
 
@@ -338,7 +339,7 @@ export async function upsertCompetitorPrice(input: CompetitorPriceInput): Promis
     method: "POST",
     query: new URLSearchParams({ on_conflict: "product_id,competitor_name,competitor_url" }),
     headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: input
+    body: { ...input, extraction_metadata: toNullablePlainObject(input.extraction_metadata) }
   });
 }
 
@@ -350,7 +351,7 @@ export async function updateCompetitorPrice(id: string, updates: Partial<Competi
     method: "PATCH",
     query,
     headers: { Prefer: "return=representation" },
-    body: updates
+    body: { ...updates, extraction_metadata: toNullablePlainObject(updates.extraction_metadata) }
   });
 }
 
@@ -398,7 +399,12 @@ export async function insertPriceHistory(input: {
   extraction_source?: string;
   extraction_metadata?: Record<string, unknown>;
 }): Promise<PriceHistoryRecord[]> {
-  return supabaseRequest<PriceHistoryRecord[]>({ table: "price_history", method: "POST", headers: { Prefer: "return=representation" }, body: input });
+  return supabaseRequest<PriceHistoryRecord[]>({
+    table: "price_history",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: { ...input, extraction_metadata: toNullablePlainObject(input.extraction_metadata) }
+  });
 }
 
 export async function findProductBySku(sku: string): Promise<ProductRecord | null> {
@@ -487,7 +493,7 @@ export async function mergeProducts(sourceProductId: string, targetProductId: st
 
 export async function getRuntimeSettings(): Promise<RuntimeSettings> {
   const rows = await supabaseRequest<AppSettingRecord[]>({ table: "app_settings", query: new URLSearchParams({ select: "*" }) });
-  const map = new Map(rows.map((row) => [row.key, row.value]));
+  const map = new Map(rows.map((row) => [row.key, toPlainObject(row.value, {})]));
   const scrape = map.get("scrape_defaults") as RuntimeSettings["scrapeDefaults"] | undefined;
   const tolerance = map.get("tolerance_settings") as RuntimeSettings["toleranceSettings"] | undefined;
 
@@ -511,7 +517,7 @@ export async function updateAppSetting(key: string, value: Record<string, unknow
     method: "POST",
     query: new URLSearchParams({ on_conflict: "key" }),
     headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: { key, value }
+    body: { key, value: toPlainObject(value, {}) }
   });
 }
 
