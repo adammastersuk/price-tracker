@@ -589,7 +589,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
             <td className="px-3 py-2"><WorkflowChip status={r.actionWorkflowStatus} /></td></tr>)}</tbody>
         </table>
       </div>
-      {selected && productForm && <Card><CardContent className="grid gap-5 lg:grid-cols-3"><div className="lg:col-span-2 space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-slate-600">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
+      {selected && productForm && <Card><CardContent className="space-y-5"><div className="space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-slate-600">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
 
             {editMode ? <div className="grid gap-2 md:grid-cols-2">{[
               ["SKU", "sku"], ["Product name", "name"], ["Brand", "brand"], ["Supplier", "supplier"], ["Bents URL", "product_url"], ["Cost price", "cost_price"]
@@ -605,7 +605,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
             <div className="rounded-lg border p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
               {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-slate-600">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {competitorForm.map((c) => {
                   const diff = formatDiff(c);
                   const isEditing = editingCompetitorId === c.id;
