@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button, Card, CardContent, Input, Select } from "@/components/ui/primitives";
 import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import { PricingStatusChip, WorkflowChip } from "@/components/features/status-chip";
@@ -141,6 +140,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   const pathname = usePathname();
   const [autoAdjustMessage, setAutoAdjustMessage] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [bulkMessage, setBulkMessage] = useState("");
@@ -556,11 +556,11 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
           }}>Delete</Button>
         </div>
         <Input placeholder="Search SKU or product" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} className="lg:col-span-1" />
-        <MultiSelectFilter label="Buyers" allLabel="All buyers" options={values.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} />
-        <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} />
-        <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={values.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} />
-        <MultiSelectFilter label="Competitors" allLabel="All competitors" options={values.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} />
-        <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...values.statuses, ...values.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} />
+        <MultiSelectFilter label="Buyers" allLabel="All buyers" options={values.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} open={openFilter === "buyers"} onOpenChange={(open) => setOpenFilter(open ? "buyers" : null)} />
+        <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} open={openFilter === "departments"} onOpenChange={(open) => setOpenFilter(open ? "departments" : null)} />
+        <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={values.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} open={openFilter === "suppliers"} onOpenChange={(open) => setOpenFilter(open ? "suppliers" : null)} />
+        <MultiSelectFilter label="Competitors" allLabel="All competitors" options={values.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} open={openFilter === "competitors"} onOpenChange={(open) => setOpenFilter(open ? "competitors" : null)} />
+        <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...values.statuses, ...values.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} open={openFilter === "statuses"} onOpenChange={(open) => setOpenFilter(open ? "statuses" : null)} />
       </CardContent></Card>
       {autoAdjustMessage && <p className="text-xs text-slate-500">{autoAdjustMessage}</p>}
       <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
@@ -674,7 +674,6 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
             )}
             {editMode && <div className="flex gap-2"><Button onClick={saveEdits} disabled={saving}>{saving ? "Saving..." : "Save changes"}</Button><Button className="bg-slate-500" onClick={() => { setEditMode(false); setProductForm(null); setCompetitorForm([]); setSelectedId(selected.id); setDuplicateSku(null); }}>Cancel</Button></div>}
           </div>
-        <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={selected.history.slice(0, 12).reverse().map((p) => ({ day: new Date(p.checkedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }), bents: p.bentsPrice, competitor: p.competitorPrice ?? 0 }))}><XAxis dataKey="day" hide /><YAxis hide /><Tooltip /><Line type="monotone" dataKey="bents" stroke="#2563eb" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="competitor" stroke="#16a34a" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div>
       </CardContent></Card>}
     </div>
   );
