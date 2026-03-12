@@ -164,6 +164,7 @@ const GFW_BLOCKED_CONTEXT = [
   /monthly/i,
   /voucher/i,
   /promo\s*code/i,
+  /basket/i,
   /discount\s*code/i,
   /sitewide/i,
   /header/i,
@@ -243,6 +244,74 @@ function reviewGardenFurnitureCandidates(candidates: PriceCandidate[]) {
   return { accepted, rejected, forcedSuspicious: false, forcedReason: "" };
 }
 
+function normalizeHtmlText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractNowPriceForGardenFurnitureWorld(html: string) {
+  const rejectedCandidates: CandidateReview[] = [];
+
+  for (const match of html.matchAll(GENERIC_PRICE_RE)) {
+    const raw = match[0] ?? "";
+    const value = parseCurrencyLike(raw);
+    if (value === null) continue;
+    const idx = match.index ?? 0;
+    const context = html.slice(Math.max(0, idx - 180), Math.min(html.length, idx + 180));
+    if (GFW_BLOCKED_CONTEXT.some((pattern) => pattern.test(context))) {
+      rejectedCandidates.push({
+        value,
+        score: -1,
+        source: "currency_token",
+        reason: "blocked_context"
+      });
+    }
+  }
+
+  const spanNowPattern =
+    /<span[^>]*>\s*Now\s*<\/span>[\s\S]{0,240}?<span[^>]*>\s*(?:£|&pound;)\s?([\d,.]{1,12})\s*<\/span>/i;
+  const spanMatch = html.match(spanNowPattern);
+  if (spanMatch?.[1]) {
+    const extractedText = `£${spanMatch[1]}`;
+    const parsed = parseCurrencyLike(extractedText);
+    if (parsed !== null) {
+      return {
+        value: parsed,
+        extractedText,
+        sourcePattern: "Now price span",
+        rejectedCandidates
+      };
+    }
+  }
+
+  const normalizedText = normalizeHtmlText(html);
+  const textMatch = normalizedText.match(/Now\s*(?:£|&pound;)\s?([\d,.]{1,12})/i);
+  if (textMatch?.[1]) {
+    const extractedText = `£${textMatch[1]}`;
+    const parsed = parseCurrencyLike(extractedText);
+    if (parsed !== null) {
+      return {
+        value: parsed,
+        extractedText,
+        sourcePattern: "Now text pattern",
+        rejectedCandidates
+      };
+    }
+  }
+
+  return {
+    value: null,
+    extractedText: null,
+    sourcePattern: "Now price span",
+    rejectedCandidates
+  };
+}
+
 class GardenFurnitureWorldAdapter implements CompetitorAdapter {
   name = "garden-furniture-world";
 
@@ -259,25 +328,10 @@ class GardenFurnitureWorldAdapter implements CompetitorAdapter {
     if (!response.ok) throw new Error(`GFW adapter failed: HTTP ${response.status}`);
     const html = await response.text();
 
-    const scriptMatches = [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
-    const jsonPrices: number[] = [];
-    for (const scriptMatch of scriptMatches) {
-      const blob = scriptMatch[1] ?? "";
-      const direct = [...blob.matchAll(/"price"\s*:\s*"?([\d.]{1,12})"?/gi)];
-      for (const priceMatch of direct) {
-        const parsed = parseCurrencyLike(priceMatch[1] ?? "");
-        if (parsed !== null) jsonPrices.push(parsed);
-      }
+    const nowExtraction = extractNowPriceForGardenFurnitureWorld(html);
+    if (nowExtraction.value === null) {
+      throw new Error("failed extraction: garden furniture world now price not found");
     }
-
-    const blockCandidates = extractHeuristicCandidates(html)
-      .map((candidate) => ({
-        ...candidate,
-        score: candidate.score + (/product|basket|add to basket|price|now|was/i.test(candidate.context) ? 4 : 0)
-      }));
-    const jsonCandidates = [...new Set(jsonPrices)].map((value) => ({ value, context: "json-ld", score: 9, source: "json_ld" }));
-    const reviewed = reviewGardenFurnitureCandidates([...jsonCandidates, ...blockCandidates]);
-    const { best, alternates, rankedCount } = pickBestPrice(reviewed.accepted);
 
     const wasMatch = html.match(/(?:was|rrp)[^£]{0,50}(£|&pound;)\s?([\d,.]{1,12})/i);
     const was = parseCurrencyLike(wasMatch?.[0] ?? "");
@@ -289,22 +343,20 @@ class GardenFurnitureWorldAdapter implements CompetitorAdapter {
         : "In Stock";
 
     return {
-      competitor_current_price: best?.value ?? null,
-      competitor_promo_price: best && was && best.value < was ? best.value : null,
+      competitor_current_price: nowExtraction.value,
+      competitor_promo_price: was && nowExtraction.value < was ? nowExtraction.value : null,
       competitor_was_price: was,
       competitor_stock_status: stock,
-      match_confidence: best ? (best.score >= 9 ? "High" : best.score >= 5 ? "Medium" : "Low") : "Needs review",
-      raw_price_text: best?.context.slice(0, 180),
+      match_confidence: "High",
+      raw_price_text: nowExtraction.extractedText ?? undefined,
       extraction_source: "garden_furniture_world",
       metadata: {
-        ranked_count: rankedCount,
-        alternates,
+        extraction_method: "garden_furniture_world_now_price",
+        extracted_text: nowExtraction.extractedText,
+        source_pattern: nowExtraction.sourcePattern,
+        rejected_candidates: nowExtraction.rejectedCandidates,
         promo_context: promoContext,
-        accepted_reason: best ? "product_context_signal" : "no_reliable_candidate",
-        rejected_candidates: reviewed.rejected,
-        forced_suspicious: reviewed.forcedSuspicious,
-        forced_suspicious_reason: reviewed.forcedReason,
-        selected_source: best?.source ?? null
+        accepted_reason: "deterministic_now_rule"
       }
     };
   }
@@ -339,6 +391,8 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
   name = "generic-html";
 
   supports(url: string) {
+    const host = hostFromUrl(url) || url;
+    if (/gardenfurnitureworld\.co\.uk/i.test(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
