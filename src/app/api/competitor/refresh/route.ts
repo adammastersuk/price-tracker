@@ -6,6 +6,7 @@ export async function POST(request: NextRequest) {
     const payload = await request.json().catch(() => ({}));
     const summary = await runCompetitorRefresh({
       productIds: payload.productIds,
+      competitorListingIds: payload.competitorListingIds,
       batchSize: payload.batchSize
     });
 
