@@ -6,9 +6,13 @@ import { CsvImport } from "@/components/features/csv-import";
 import { ProductsTable } from "@/components/features/products-table";
 import { TrackedProductRow } from "@/types/pricing";
 
+interface BuyerSetting { name: string; isActive: boolean; departments: string[]; }
+
+const parseMulti = (value: string | null) => value ? value.split(",").map((v) => decodeURIComponent(v).trim()).filter(Boolean) : [];
+
 export default function ProductsPage() {
   const [rows, setRows] = useState<TrackedProductRow[]>([]);
-  const [configuredOptions, setConfiguredOptions] = useState<{ buyers: string[]; departments: string[]; competitors: string[] }>({ buyers: [], departments: [], competitors: [] });
+  const [configuredOptions, setConfiguredOptions] = useState<{ buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments: Record<string, string[]> }>({ buyers: [], departments: [], competitors: [], buyerDepartments: {} });
   const searchParams = useSearchParams();
 
   const loadProducts = useCallback(async () => {
@@ -18,11 +22,13 @@ export default function ProductsPage() {
     ]);
     const productsPayload = await productsResponse.json();
     const settingsPayload = await settingsResponse.json();
+    const buyers = (settingsPayload.data?.buyers ?? []) as BuyerSetting[];
     setRows(productsPayload.data ?? []);
     setConfiguredOptions({
-      buyers: (settingsPayload.data?.buyers ?? []).filter((buyer: { isActive: boolean; name: string }) => buyer.isActive).map((buyer: { name: string }) => buyer.name),
+      buyers: buyers.filter((buyer) => buyer.isActive).map((buyer) => buyer.name),
       departments: (settingsPayload.data?.departments ?? []).map((department: { name: string }) => department.name),
-      competitors: (settingsPayload.data?.competitors ?? []).filter((competitor: { isEnabled: boolean; name: string }) => competitor.isEnabled).map((competitor: { name: string }) => competitor.name)
+      competitors: (settingsPayload.data?.competitors ?? []).filter((competitor: { isEnabled: boolean; name: string }) => competitor.isEnabled).map((competitor: { name: string }) => competitor.name),
+      buyerDepartments: Object.fromEntries(buyers.map((buyer) => [buyer.name, buyer.departments ?? []]))
     });
   }, []);
 
@@ -32,7 +38,10 @@ export default function ProductsPage() {
 
   const initialFilters = useMemo(() => ({
     search: searchParams.get("search") ?? "",
-    status: searchParams.get("status") ?? "all"
+    statuses: parseMulti(searchParams.get("status")),
+    buyers: parseMulti(searchParams.get("buyers")),
+    departments: parseMulti(searchParams.get("departments")),
+    competitors: parseMulti(searchParams.get("competitors"))
   }), [searchParams]);
 
   return (

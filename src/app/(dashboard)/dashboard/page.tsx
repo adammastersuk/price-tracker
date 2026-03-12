@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DashboardCards } from "@/components/features/dashboard-cards";
 import { PricingStatusChip, WorkflowChip } from "@/components/features/status-chip";
+import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select } from "@/components/ui/primitives";
 import {
   dashboardStats,
@@ -20,13 +21,20 @@ import { TrackedProductRow } from "@/types/pricing";
 
 type GapSort = "gbp" | "percent";
 
+interface BuyerSetting {
+  name: string;
+  isActive: boolean;
+  departments: string[];
+}
+
 export default function DashboardPage() {
   const [rows, setRows] = useState<TrackedProductRow[]>([]);
   const [filters, setFilters] = useState(defaultFilters);
   const [gapSort, setGapSort] = useState<GapSort>("gbp");
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<{ scrapeDefaults?: { staleCheckHours?: number } }>({});
-  const [configured, setConfigured] = useState<{ buyers: string[]; departments: string[] }>({ buyers: [], departments: [] });
+  const [configured, setConfigured] = useState<{ buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments: Record<string, string[]> }>({ buyers: [], departments: [], competitors: [], buyerDepartments: {} });
+  const [autoAdjustMessage, setAutoAdjustMessage] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -34,19 +42,44 @@ export default function DashboardPage() {
       fetch("/api/settings/runtime", { cache: "no-store" }).then((res) => res.json()),
       fetch("/api/settings", { cache: "no-store" }).then((res) => res.json())
     ]).then(([productsPayload, runtimePayload, settingsPayload]) => {
+      const buyers = (settingsPayload.data?.buyers ?? []) as BuyerSetting[];
       setRows(productsPayload.data ?? []);
       setRuntime(runtimePayload.data ?? {});
       setConfigured({
-        buyers: (settingsPayload.data?.buyers ?? []).filter((b: { isActive: boolean }) => b.isActive).map((b: { name: string }) => b.name),
-        departments: (settingsPayload.data?.departments ?? []).map((d: { name: string }) => d.name)
+        buyers: buyers.filter((b) => b.isActive).map((b) => b.name),
+        departments: (settingsPayload.data?.departments ?? []).map((d: { name: string }) => d.name),
+        competitors: (settingsPayload.data?.competitors ?? []).filter((c: { isEnabled: boolean }) => c.isEnabled).map((c: { name: string }) => c.name),
+        buyerDepartments: Object.fromEntries(buyers.map((buyer) => [buyer.name, buyer.departments ?? []]))
       });
     });
   }, []);
 
   const choices = useMemo(() => {
     const derived = uniqueValues(rows);
-    return { ...derived, buyers: configured.buyers.length ? configured.buyers : derived.buyers, departments: configured.departments.length ? configured.departments : derived.departments };
+    return {
+      ...derived,
+      buyers: configured.buyers.length ? configured.buyers : derived.buyers,
+      departments: configured.departments.length ? configured.departments : derived.departments,
+      competitors: configured.competitors.length ? configured.competitors : derived.competitors
+    };
   }, [rows, configured]);
+
+  const availableDepartments = useMemo(() => {
+    if (filters.buyers.length === 0) return choices.departments;
+    const union = new Set<string>();
+    filters.buyers.forEach((buyer) => (configured.buyerDepartments[buyer] ?? []).forEach((department) => union.add(department)));
+    return choices.departments.filter((department) => union.has(department));
+  }, [filters.buyers, choices.departments, configured.buyerDepartments]);
+
+  useEffect(() => {
+    setFilters((prev) => {
+      const pruned = prev.departments.filter((department) => availableDepartments.includes(department));
+      if (pruned.length === prev.departments.length) return prev;
+      setAutoAdjustMessage("Department selection updated to match selected buyers.");
+      return { ...prev, departments: pruned };
+    });
+  }, [availableDepartments]);
+
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
   const stats = useMemo(() => dashboardStats(filteredRows, runtime), [filteredRows, runtime]);
   const queue = useMemo(() => prioritisedReviewQueue(filteredRows, runtime).slice(0, 12), [filteredRows, runtime]);
@@ -93,30 +126,20 @@ export default function DashboardPage() {
         <CardHeader>
           <CardTitle>Commercial filters</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <Input
             placeholder="Search SKU or product"
             value={filters.search}
             onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
           />
-          <Select value={filters.buyer} onChange={(e) => setFilters((prev) => ({ ...prev, buyer: e.target.value }))}>
-            <option value="all">All buyers</option>
-            {choices.buyers.map((buyer) => <option key={buyer} value={buyer}>{buyer}</option>)}
-          </Select>
-          <Select value={filters.supplier} onChange={(e) => setFilters((prev) => ({ ...prev, supplier: e.target.value }))}>
-            <option value="all">All suppliers</option>
-            {choices.suppliers.map((supplier) => <option key={supplier} value={supplier}>{supplier}</option>)}
-          </Select>
-          <Select value={filters.department} onChange={(e) => setFilters((prev) => ({ ...prev, department: e.target.value }))}>
-            <option value="all">All departments</option>
-            {choices.departments.map((department) => <option key={department} value={department}>{department}</option>)}
-          </Select>
-          <Select value={filters.status} onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value }))}>
-            <option value="all">All statuses</option>
-            {[...new Set([...choices.statuses, ...choices.workflows])].map((status) => <option key={status} value={status}>{status}</option>)}
-          </Select>
+          <MultiSelectFilter label="Buyers" allLabel="All buyers" options={choices.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} />
+          <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} />
+          <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={choices.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} />
+          <MultiSelectFilter label="Competitors" allLabel="All competitors" options={choices.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} />
+          <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...choices.statuses, ...choices.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} />
         </CardContent>
       </Card>
+      {autoAdjustMessage ? <p className="text-xs text-slate-500">{autoAdjustMessage}</p> : null}
 
       <DashboardCards metrics={metrics} />
 

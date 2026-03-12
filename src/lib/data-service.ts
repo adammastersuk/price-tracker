@@ -2,22 +2,22 @@ import { CompetitorListing, TrackedProductRow, WorkflowStatus } from "@/types/pr
 
 export interface ProductFilters {
   search: string;
-  buyer: string;
-  department: string;
-  supplier: string;
-  brand: string;
-  competitor: string;
-  status: string;
+  buyers: string[];
+  departments: string[];
+  suppliers: string[];
+  brands: string[];
+  competitors: string[];
+  statuses: string[];
 }
 
 export const defaultFilters: ProductFilters = {
   search: "",
-  buyer: "all",
-  department: "all",
-  supplier: "all",
-  brand: "all",
-  competitor: "all",
-  status: "all"
+  buyers: [],
+  departments: [],
+  suppliers: [],
+  brands: [],
+  competitors: [],
+  statuses: []
 };
 
 const DEFAULT_STALE_HOURS = Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24;
@@ -60,6 +60,10 @@ export interface QueueItem {
   lowestTrusted: TrustedCompetitor | null;
 }
 
+function matchMulti(selected: string[], value: string) {
+  return selected.length === 0 || selected.includes(value);
+}
+
 export function queryProducts(rows: TrackedProductRow[], filters: ProductFilters): TrackedProductRow[] {
   return rows.filter((r) => {
     const search = filters.search.toLowerCase();
@@ -67,12 +71,12 @@ export function queryProducts(rows: TrackedProductRow[], filters: ProductFilters
       || r.internalSku.toLowerCase().includes(search)
       || r.productName.toLowerCase().includes(search);
     return matchSearch
-      && (filters.buyer === "all" || r.buyer === filters.buyer)
-      && (filters.department === "all" || r.department === filters.department)
-      && (filters.supplier === "all" || r.supplier === filters.supplier)
-      && (filters.brand === "all" || r.brand === filters.brand)
-      && (filters.competitor === "all" || r.competitorListings.some((c) => c.competitorName === filters.competitor))
-      && (filters.status === "all" || r.pricingStatus === filters.status || r.actionWorkflowStatus === filters.status);
+      && matchMulti(filters.buyers, r.buyer)
+      && matchMulti(filters.departments, r.department)
+      && matchMulti(filters.suppliers, r.supplier)
+      && matchMulti(filters.brands, r.brand)
+      && (filters.competitors.length === 0 || r.competitorListings.some((c) => filters.competitors.includes(c.competitorName)))
+      && (filters.statuses.length === 0 || filters.statuses.includes(r.pricingStatus) || filters.statuses.includes(r.actionWorkflowStatus));
   });
 }
 
@@ -226,41 +230,44 @@ export function dashboardStats(rows: TrackedProductRow[], runtime?: RuntimeSetti
     suspicious: signals.filter((s) => s.suspicious).length,
     stale: signals.filter((s) => s.stale).length,
     missingMapping: signals.filter((s) => s.missingMapping).length,
-    missingValidCompetitorPrice: signals.filter((s) => s.missingValidCompetitorPrice).length,
-    failedChecks: signals.filter((s) => s.failedCheck).length
+    missingValidCompetitorPrice: signals.filter((s) => s.missingValidCompetitorPrice).length
   };
-}
-
-export function exceptionBreakdown(rows: TrackedProductRow[], runtime?: RuntimeSettingsInput) {
-  const init = {
-    bentsHigher: 0,
-    promoDiscrepancy: 0,
-    suspicious: 0,
-    failed: 0,
-    missingMapping: 0,
-    missingValidCompetitorPrice: 0,
-    stale: 0
-  };
-
-  return rows.reduce((acc, row) => {
-    const s = rowCommercialSignals(row, runtime);
-    if (s.bentsNotCheapest) acc.bentsHigher += 1;
-    if (s.promoDiscrepancy) acc.promoDiscrepancy += 1;
-    if (s.suspicious) acc.suspicious += 1;
-    if (s.failedCheck) acc.failed += 1;
-    if (s.missingMapping) acc.missingMapping += 1;
-    if (s.missingValidCompetitorPrice) acc.missingValidCompetitorPrice += 1;
-    if (s.stale) acc.stale += 1;
-    return acc;
-  }, init);
 }
 
 export function largestPriceGaps(rows: TrackedProductRow[], sortBy: "gbp" | "percent" = "gbp", runtime?: RuntimeSettingsInput): QueueItem[] {
-  return prioritisedReviewQueue(rows, runtime)
-    .filter((entry) => entry.lowestTrusted && entry.gapGbp > 0)
-    .sort((a, b) => sortBy === "gbp"
-      ? b.gapGbp - a.gapGbp || b.gapPercent - a.gapPercent
-      : b.gapPercent - a.gapPercent || b.gapGbp - a.gapGbp);
+  const enriched = rows
+    .map((row) => {
+      const signals = rowCommercialSignals(row, runtime);
+      return {
+        row,
+        reason: topReason(row, runtime),
+        score: priorityScore(row, runtime),
+        gapGbp: signals.gapGbp,
+        gapPercent: signals.gapPercent,
+        lowestTrusted: signals.lowestTrusted
+      };
+    })
+    .filter((entry) => entry.lowestTrusted && entry.gapGbp > 0);
+
+  return enriched.sort((a, b) => {
+    if (sortBy === "percent") {
+      return b.gapPercent - a.gapPercent || b.gapGbp - a.gapGbp;
+    }
+    return b.gapGbp - a.gapGbp || b.gapPercent - a.gapPercent;
+  });
+}
+
+export function exceptionBreakdown(rows: TrackedProductRow[], runtime?: RuntimeSettingsInput) {
+  const signals = rows.map((row) => rowCommercialSignals(row, runtime));
+  return {
+    bentsHigher: signals.filter((s) => s.bentsNotCheapest).length,
+    promoDiscrepancy: signals.filter((s) => s.promoDiscrepancy).length,
+    suspicious: signals.filter((s) => s.suspicious).length,
+    failed: rows.filter((row) => row.lastCheckStatus === "failed" || row.competitorListings.some((c) => c.lastCheckStatus === "failed")).length,
+    missingMapping: signals.filter((s) => s.missingMapping).length,
+    missingValidCompetitorPrice: signals.filter((s) => s.missingValidCompetitorPrice).length,
+    stale: signals.filter((s) => s.stale).length
+  };
 }
 
 export function staleThresholdHours(runtime?: RuntimeSettingsInput) {

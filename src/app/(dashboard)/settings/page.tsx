@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@/components/ui/primitives";
 
 interface Buyer { id: string; name: string; isActive: boolean; departments: string[]; usedByProducts: number; }
@@ -14,6 +14,17 @@ interface SettingsPayload { buyers: Buyer[]; departments: Department[]; competit
 
 const defaultState: SettingsPayload = { buyers: [], departments: [], competitors: [], runtimeSettings: { scrapeDefaults: { staleCheckHours: 24, batchSize: 50, defaultRefreshFrequencyHours: 24 }, toleranceSettings: { inLinePricingTolerancePercent: 3, suspiciousLowPriceThresholdPercent: 35, suspiciousHighPriceThresholdPercent: 80 } } };
 
+function AccordionSection({ title, count, open, onToggle, children }: { title: string; count: number; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return <Card>
+    <button type="button" onClick={onToggle} className="flex w-full items-center justify-between p-5 text-left">
+      <h3 className="text-sm font-medium text-slate-700">{title} ({count})</h3>
+      <span className="text-xs text-slate-500">{open ? "Hide" : "Show"}</span>
+    </button>
+    {open ? <CardContent className="pt-0">{children}</CardContent> : null}
+  </Card>;
+}
+
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsPayload>(defaultState);
   const [message, setMessage] = useState("");
@@ -25,6 +36,7 @@ export default function SettingsPage() {
   const [editingBuyerId, setEditingBuyerId] = useState<string | null>(null);
   const [editingDepartmentId, setEditingDepartmentId] = useState<string | null>(null);
   const [editingCompetitorId, setEditingCompetitorId] = useState<string | null>(null);
+  const [openSection, setOpenSection] = useState<"buyers" | "departments" | "competitors" | null>("buyers");
 
   const load = useCallback(async () => {
     const response = await fetch("/api/settings", { cache: "no-store" });
@@ -60,7 +72,8 @@ export default function SettingsPage() {
     {message && <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{message}</div>}
     {error && <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
 
-    <Card><CardHeader><CardTitle>Buyers</CardTitle></CardHeader><CardContent className="space-y-3">
+    <AccordionSection title="Buyers" count={settings.buyers.length} open={openSection === "buyers"} onToggle={() => setOpenSection((prev) => prev === "buyers" ? null : "buyers")}>
+      <div className="space-y-3">
       <p className="text-sm text-slate-600">Manage buyers and assigned departments. Duplicate names are blocked using normalized matching.</p>
       {settings.buyers.map((buyer) => <div key={buyer.id} className="rounded border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -98,9 +111,11 @@ export default function SettingsPage() {
           const response = await fetch("/api/settings/buyers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newBuyer, isActive: true }) }); const payload = await response.json(); if (!response.ok) throw new Error(payload.error ?? "Failed to create buyer"); setNewBuyer("");
         }, "Buyer created")}>Add buyer</Button>
       </div>
-    </CardContent></Card>
+      </div>
+    </AccordionSection>
 
-    <Card><CardHeader><CardTitle>Departments</CardTitle></CardHeader><CardContent className="space-y-3">
+    <AccordionSection title="Departments" count={settings.departments.length} open={openSection === "departments"} onToggle={() => setOpenSection((prev) => prev === "departments" ? null : "departments")}>
+      <div className="space-y-3">
       {settings.departments.map((department) => <div key={department.id} className="rounded border p-3">
         <div className="flex items-center justify-between gap-2">
           <div><p className="font-medium">{department.name}</p><p className="text-xs text-slate-500">Assigned buyers: {department.buyers.join(", ") || "None"}</p><p className="text-xs text-slate-500">Used by {department.usedByProducts} products</p></div>
@@ -116,9 +131,11 @@ export default function SettingsPage() {
       <div className="flex gap-2 items-center border-t pt-3"><Input className="max-w-sm" placeholder="Add department" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)} /><Button disabled={busy || !newDepartment.trim()} onClick={() => runAction(async () => {
         const response = await fetch("/api/settings/departments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newDepartment }) }); const payload = await response.json(); if (!response.ok) throw new Error(payload.error ?? "Failed to create department"); setNewDepartment("");
       }, "Department created")}>Add department</Button></div>
-    </CardContent></Card>
+      </div>
+    </AccordionSection>
 
-    <Card><CardHeader><CardTitle>Competitors</CardTitle></CardHeader><CardContent className="space-y-3">
+    <AccordionSection title="Competitors" count={settings.competitors.length} open={openSection === "competitors"} onToggle={() => setOpenSection((prev) => prev === "competitors" ? null : "competitors")}>
+      <div className="space-y-3">
       <p className="text-sm text-slate-600">Matching prioritizes competitor URL/domain first, then competitor name.</p>
       {settings.competitors.map((competitor) => <div key={competitor.id} className="rounded border p-3">
         <div className="grid gap-2 md:grid-cols-5 md:items-center">
@@ -152,7 +169,8 @@ export default function SettingsPage() {
           const response = await fetch("/api/settings/competitors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...newCompetitor, isEnabled: true }) }); const payload = await response.json(); if (!response.ok) throw new Error(payload.error ?? "Failed to create competitor"); setNewCompetitor({ name: "", baseUrl: "", domain: "", adapterKey: "generic" });
         }, "Competitor created")}>Add competitor</Button>
       </div>
-    </CardContent></Card>
+      </div>
+    </AccordionSection>
 
     <Card><CardHeader><CardTitle>Scrape defaults</CardTitle></CardHeader><CardContent className="grid gap-2 lg:grid-cols-4 items-end">
       <label className="text-sm">Stale check hours<p className="text-xs text-slate-500">Age before listings are treated as stale for refresh queues.</p><Input type="number" min={1} value={settings.runtimeSettings.scrapeDefaults.staleCheckHours} onChange={(e) => setSettings((prev) => ({ ...prev, runtimeSettings: { ...prev.runtimeSettings, scrapeDefaults: { ...prev.runtimeSettings.scrapeDefaults, staleCheckHours: Number(e.target.value) } } }))} /></label>
