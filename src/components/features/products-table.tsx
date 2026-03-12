@@ -91,8 +91,8 @@ const formatDiff = (listing: CompetitorListing) => {
   return { line1, line2, tone: direction === "cheaper" ? "text-emerald-700" : "text-rose-700" };
 };
 
-export function ProductsTable({ rows, onRefreshDone }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; }) {
-  const [filters, setFilters] = useState(defaultFilters);
+export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; }) {
+  const [filters, setFilters] = useState({ ...defaultFilters, ...initialFilters });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
