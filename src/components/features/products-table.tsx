@@ -134,7 +134,7 @@ const formatDiff = (listing: CompetitorListing) => {
 
 interface ConfiguredOptions { buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments?: Record<string, string[]>; }
 
-export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredOptions }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; configuredOptions?: ConfiguredOptions; }) {
+export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredOptions, initialSelectedProductParam }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; configuredOptions?: ConfiguredOptions; initialSelectedProductParam?: string; }) {
   const [filters, setFilters] = useState({ ...defaultFilters, ...initialFilters });
   const router = useRouter();
   const pathname = usePathname();
@@ -160,6 +160,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [savedViewName, setSavedViewName] = useState("");
   const [activeSavedViewId, setActiveSavedViewId] = useState<string>("");
+  const normalizedSelectedParam = (initialSelectedProductParam ?? "").trim().toLowerCase();
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
 
   const currentViewState = (): SavedViewState => ({
@@ -240,6 +241,8 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     });
   }, [availableDepartments]);
 
+  const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
+
   useEffect(() => {
     const params = new URLSearchParams();
     if (filters.search) params.set("search", filters.search);
@@ -247,22 +250,38 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     if (filters.departments.length) params.set("departments", filters.departments.map(encodeURIComponent).join(","));
     if (filters.competitors.length) params.set("competitors", filters.competitors.map(encodeURIComponent).join(","));
     if (filters.statuses.length) params.set("status", filters.statuses.map(encodeURIComponent).join(","));
+    if (selected) {
+      params.set("productId", selected.id);
+      params.set("sku", selected.internalSku);
+    }
     const query = params.toString();
     router.replace((query ? `${pathname}?${query}` : pathname) as never, { scroll: false });
-  }, [filters, pathname, router]);
+  }, [filters, pathname, router, selected]);
 
-  const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
   const selectedRows = useMemo(() => rows.filter((row) => selectedIds.includes(row.id)), [rows, selectedIds]);
   const visibleSelectedCount = useMemo(() => filteredRows.filter((row) => selectedIds.includes(row.id)).length, [filteredRows, selectedIds]);
   const [productForm, setProductForm] = useState<ProductForm | null>(null);
   const [competitorForm, setCompetitorForm] = useState<CompetitorListing[]>([]);
 
   useEffect(() => {
-    if (!selectedId && rows.length) setSelectedId(rows[0].id);
-    if (selectedId && rows.length && !rows.some((row) => row.id === selectedId)) {
-      setSelectedId(rows[0]?.id ?? null);
+    if (!rows.length) {
+      if (selectedId !== null) setSelectedId(null);
+      return;
     }
-  }, [rows, selectedId]);
+
+    const targetRow = normalizedSelectedParam
+      ? rows.find((row) => row.id.toLowerCase() === normalizedSelectedParam || row.internalSku.toLowerCase() === normalizedSelectedParam)
+      : null;
+
+    if (!selectedId) {
+      setSelectedId(targetRow?.id ?? null);
+      return;
+    }
+
+    if (!rows.some((row) => row.id === selectedId)) {
+      setSelectedId(targetRow?.id ?? null);
+    }
+  }, [normalizedSelectedParam, rows, selectedId]);
 
   useEffect(() => {
     setSelectedIds((prev) => {
