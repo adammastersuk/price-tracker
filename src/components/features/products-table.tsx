@@ -25,6 +25,7 @@ const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
 };
 
 const stockOptions: CompetitorStockStatus[] = ["In Stock", "Low Stock", "Out of Stock", "Unknown"];
+const workflowOptions = ["Open", "Monitoring", "Reviewed", "No Action", "Closed"] as const;
 
 const statusText = (status: CompetitorListing["lastCheckStatus"]) => {
   if (status === "success") return "Success";
@@ -96,7 +97,11 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
+  const [bulkMessage, setBulkMessage] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkOwner, setBulkOwner] = useState("");
+  const [bulkWorkflowStatus, setBulkWorkflowStatus] = useState<(typeof workflowOptions)[number]>("Open");
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
@@ -133,6 +138,8 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
   }, [filteredRows, sortDirection, sortKey]);
   const values = useMemo(() => uniqueValues(rows), [rows]);
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
+  const selectedRows = useMemo(() => rows.filter((row) => selectedIds.includes(row.id)), [rows, selectedIds]);
+  const visibleSelectedCount = useMemo(() => filteredRows.filter((row) => selectedIds.includes(row.id)).length, [filteredRows, selectedIds]);
   const [productForm, setProductForm] = useState<ProductForm | null>(null);
   const [competitorForm, setCompetitorForm] = useState<CompetitorListing[]>([]);
 
@@ -142,6 +149,17 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
       setSelectedId(rows[0]?.id ?? null);
     }
   }, [rows, selectedId]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const valid = new Set(rows.map((row) => row.id));
+      const next = prev.filter((id) => valid.has(id));
+      if (next.length !== prev.length) {
+        setBulkMessage(`Selection updated: ${prev.length - next.length} row(s) are no longer available.`);
+      }
+      return next;
+    });
+  }, [rows]);
 
   useEffect(() => {
     if (!selected) return;
@@ -319,13 +337,61 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
     }
   };
 
-  const downloadCsv = () => {
-    const blob = new Blob([exportProductsCsv(filteredRows)], { type: "text/csv;charset=utf-8;" });
+  const downloadCsv = (targetRows: TrackedProductRow[], prefix = "bents-pricing-export") => {
+    const blob = new Blob([exportProductsCsv(targetRows)], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "bents-pricing-export.csv";
+    link.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const runBulkAction = async (action: "assign_owner" | "set_workflow_status" | "mark_reviewed") => {
+    if (!selectedIds.length) return;
+    if ((action === "set_workflow_status" || action === "mark_reviewed") && !window.confirm(`Apply this ${action === "mark_reviewed" ? "reviewed shortcut" : "workflow status"} update to ${selectedIds.length} product(s)?`)) {
+      return;
+    }
+
+    setBulkBusy(true);
+    setBulkMessage("");
+    try {
+      const response = await fetch("/api/products/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          productIds: selectedIds,
+          owner: bulkOwner,
+          workflowStatus: action === "mark_reviewed" ? "Reviewed" : bulkWorkflowStatus
+        })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setBulkMessage(payload.error ?? "Bulk action failed.");
+        return;
+      }
+      setBulkMessage(`Updated ${payload.data?.updated ?? selectedIds.length} row(s) successfully.`);
+      await onRefreshDone();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const runBulkRefresh = async () => {
+    if (!selectedIds.length) return;
+    setBulkBusy(true);
+    await runRefresh(selectedIds);
+    setBulkBusy(false);
+  };
+
+  const toggleAllVisible = (checked: boolean) => {
+    if (checked) {
+      setSelectedIds((prev) => [...new Set([...prev, ...sortedRows.map((row) => row.id)])]);
+      return;
+    }
+    const visibleIds = new Set(sortedRows.map((row) => row.id));
+    setSelectedIds((prev) => prev.filter((id) => !visibleIds.has(id)));
   };
 
   const onSort = (key: SortKey) => {
@@ -349,14 +415,16 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
         <Select value={filters.competitor} onChange={(e) => setFilters({ ...filters, competitor: e.target.value })}><option value="all">All competitor</option>{values.competitors.map((v) => <option key={v}>{v}</option>)}</Select>
         <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="all">All status</option>{values.statuses.map((v) => <option key={v}>{v}</option>)}</Select>
       </CardContent></Card>
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{sortedRows.length} products</p><div className="flex gap-2"><Button onClick={downloadCsv}>Export CSV</Button><Button onClick={() => runRefresh(selectedIds)} disabled={refreshing || !selectedIds.length}>Refresh selected rows</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
+      {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
       {message && <p className="text-sm text-slate-700">{message}</p>}
+      {bulkMessage && <p className="text-sm text-slate-700">{bulkMessage}</p>}
 
       <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel">
-        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600"><th className="px-3 py-2"></th>{([
+        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
           ["SKU", "sku"], ["Product", "product"], ["Buyer", "buyer"], ["Bents", "bents"], ["Competitor", "competitor"], ["Diff", "diff"], ["Status", "status"], ["Workflow", "workflow"]
         ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
-          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""}`} onClick={() => setSelectedId(r.id)}>
+          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40" : ""}`} onClick={() => setSelectedId(r.id)}>
             <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, r.id] : prev.filter((id) => id !== r.id))} /></td>
             <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>

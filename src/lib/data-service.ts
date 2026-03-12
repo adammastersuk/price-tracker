@@ -149,6 +149,10 @@ export function exceptionReason(row: TrackedProductRow): string {
 
 const workflowWeight: Record<WorkflowStatus, number> = {
   Open: 20,
+  Monitoring: 8,
+  Reviewed: -5,
+  "No Action": -10,
+  Closed: -30,
   "In Review": 10,
   "Awaiting Supplier": 5,
   Resolved: -30

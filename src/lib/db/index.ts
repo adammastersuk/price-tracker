@@ -291,6 +291,16 @@ export async function addProductNote(input: { product_id: string; note: string; 
   });
 }
 
+export async function addProductNotesBulk(inputs: Array<{ product_id: string; note: string; owner?: string; workflow_status?: string; }>): Promise<ProductNoteRecord[]> {
+  if (!inputs.length) return [];
+  return supabaseRequest<ProductNoteRecord[]>({
+    table: "product_notes",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: inputs
+  });
+}
+
 export async function insertPriceHistory(input: { product_id: string; competitor_name: string; price?: number | null; checked_at?: string; }): Promise<PriceHistoryRecord[]> {
   return supabaseRequest<PriceHistoryRecord[]>({ table: "price_history", method: "POST", headers: { Prefer: "return=representation" }, body: input });
 }

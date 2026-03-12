@@ -1,7 +1,56 @@
+import { rowCommercialSignals } from "@/lib/data-service";
 import { TrackedProductRow } from "@/types/pricing";
 
+function csvEscape(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
 export function exportProductsCsv(rows: TrackedProductRow[]): string {
-  const headers = ["SKU","Product Name","Buyer","Department","Bents Price","Competitor","Competitor Price","Price Diff GBP","Price Diff %","Status","Action Owner","Workflow"];
-  const body = rows.map((r) => [r.internalSku, r.productName, r.buyer, r.department, r.bentsRetailPrice, r.competitorName, r.competitorCurrentPrice ?? "", r.priceDifferenceGbp ?? "", r.priceDifferencePercent ?? "", r.pricingStatus, r.actionOwner, r.actionWorkflowStatus].join(","));
-  return [headers.join(","), ...body].join("\n");
+  const headers = [
+    "SKU",
+    "Product Name",
+    "Buyer",
+    "Supplier",
+    "Department",
+    "Bents Price",
+    "Lowest Valid Competitor",
+    "Competitor Summary",
+    "Diff GBP",
+    "Diff %",
+    "Workflow Status",
+    "Issue Summary"
+  ];
+
+  const body = rows.map((row) => {
+    const signals = rowCommercialSignals(row);
+    const issueSummary = [
+      signals.missingMapping ? "Missing mapping" : "",
+      signals.failedCheck ? "Failed check" : "",
+      signals.suspicious ? "Suspicious" : "",
+      signals.stale ? "Stale" : "",
+      signals.bentsNotCheapest && signals.lowestTrusted
+        ? `Gap +£${signals.gapGbp.toFixed(2)} vs ${signals.lowestTrusted.competitorName}`
+        : ""
+    ].filter(Boolean).join("; ");
+
+    return [
+      row.internalSku,
+      row.productName,
+      row.buyer,
+      row.supplier,
+      row.department,
+      row.bentsRetailPrice,
+      signals.lowestTrusted ? `${signals.lowestTrusted.competitorName} £${signals.lowestTrusted.price.toFixed(2)}` : "",
+      row.competitorSummaryLabel,
+      row.priceDifferenceGbp ?? "",
+      row.priceDifferencePercent ?? "",
+      row.actionWorkflowStatus,
+      issueSummary
+    ].map(csvEscape).join(",");
+  });
+
+  return [headers.map(csvEscape).join(","), ...body].join("\n");
 }
