@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runCompetitorRefresh } from "@/lib/competitor-check/runner";
+import { enqueueCompetitorRefresh, processOneQueuedRefresh } from "@/lib/competitor-check/runner";
 
 function isAuthorized(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -22,7 +22,14 @@ export async function GET(request: NextRequest) {
   try {
     console.info("[cron] competitor-check started");
     const mode = (request.nextUrl.searchParams.get("mode") as "priority" | "daily" | null) ?? "daily";
-    const summary = await runCompetitorRefresh({ scheduleMode: mode, triggerSource: "cron" });
+    const existingRunId = request.nextUrl.searchParams.get("runId");
+    const runId = existingRunId ?? (await enqueueCompetitorRefresh({ scheduleMode: mode, triggerSource: "cron" })).runId;
+
+    if (!runId) {
+      return NextResponse.json({ data: { total: 0, processed: 0, succeeded: 0, failed: 0, suspicious: 0, failures: [], pending: 0 } });
+    }
+
+    const summary = await processOneQueuedRefresh(runId);
     console.info("[cron] competitor-check finished", summary);
     return NextResponse.json({ data: summary });
   } catch (error) {
