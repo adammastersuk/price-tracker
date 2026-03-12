@@ -1,7 +1,7 @@
 export type CompetitorStockStatus = "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
 export type PricingStatus = "Higher than competitor" | "Cheaper than competitor" | "In line with competitor" | "Promo discrepancy" | "Competitor out of stock" | "Needs review" | "Missing competitor data";
 export type MatchConfidence = "High" | "Medium" | "Low" | "Needs review";
-export type WorkflowStatus = "Open" | "In Review" | "Awaiting Supplier" | "Resolved";
+export type WorkflowStatus = "Open" | "Monitoring" | "Reviewed" | "No Action" | "Closed" | "In Review" | "Awaiting Supplier" | "Resolved";
 export type CheckStatus = "success" | "failed" | "suspicious" | "pending";
 
 export interface PriceHistoryPoint { checkedAt: string; bentsPrice: number; competitorPrice: number | null; }

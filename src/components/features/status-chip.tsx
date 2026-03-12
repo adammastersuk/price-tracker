@@ -17,6 +17,10 @@ export function PricingStatusChip({ status }: { status: PricingStatus }) {
 export function WorkflowChip({ status }: { status: WorkflowStatus }) {
   const color: Record<WorkflowStatus, string> = {
     Open: "bg-sky-100 text-sky-700",
+    Monitoring: "bg-indigo-100 text-indigo-700",
+    Reviewed: "bg-emerald-100 text-emerald-700",
+    "No Action": "bg-slate-200 text-slate-700",
+    Closed: "bg-slate-800 text-white",
     "In Review": "bg-indigo-100 text-indigo-700",
     "Awaiting Supplier": "bg-amber-100 text-amber-700",
     Resolved: "bg-emerald-100 text-emerald-700"
