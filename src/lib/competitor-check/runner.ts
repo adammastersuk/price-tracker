@@ -9,8 +9,17 @@ import {
   getRuntimeSettings
 } from "@/lib/db";
 import { AdapterExtractionError, selectAdapter } from "@/lib/competitor-check/adapters";
-import { completeRefreshRun, createRefreshRun, logActivity, logRefreshRunItem, upsertAlert } from "@/lib/operations";
-import { rowCommercialSignals } from "@/lib/data-service";
+import {
+  completeRefreshRun,
+  createRefreshRun,
+  getRefreshRun,
+  listQueuedRefreshRunItems,
+  logActivity,
+  logRefreshRunItem,
+  updateRefreshRun,
+  updateRefreshRunItem,
+  upsertAlert
+} from "@/lib/operations";
 
 export interface RefreshOptions {
   productIds?: string[];
@@ -35,6 +44,12 @@ interface RefreshTarget {
   lastCheckedAt?: string;
 }
 
+interface QueuedTarget {
+  queueItemId: string;
+  runId: string;
+  target: RefreshTarget;
+}
+
 export interface RefreshFailure {
   productId: string;
   sku: string;
@@ -50,19 +65,7 @@ export interface RefreshSummary {
   suspicious: number;
   failures: RefreshFailure[];
   runId?: string;
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
-
-function getBatchSize(runtimeBatchSize: number | undefined, explicit?: number): number {
-  if (explicit) return explicit;
-  if (runtimeBatchSize && runtimeBatchSize > 0) return runtimeBatchSize;
-  const env = Number.parseInt(process.env.CHECK_BATCH_SIZE ?? "", 10);
-  return Number.isFinite(env) && env > 0 ? env : 10;
+  pending?: number;
 }
 
 function isSuspicious(previousPrice: number | null, nextPrice: number | null, highThresholdPercent: number): boolean {
@@ -267,137 +270,163 @@ async function saveFailure(target: RefreshTarget, reason: string, diagnostics?: 
   });
 }
 
-async function generateOperationalAlerts(runtime: Awaited<ReturnType<typeof getRuntimeSettings>>) {
-  const rows = await getProducts();
-  for (const row of rows) {
-    const signals = rowCommercialSignals(row, runtime);
-    if (signals.bentsNotCheapest && signals.lowestTrusted) {
-      await upsertAlert({
-        dedupe_key: `not-cheapest:${row.id}:${signals.lowestTrusted.competitorName}`,
-        product_id: row.id,
-        competitor_name: signals.lowestTrusted.competitorName,
-        reason: "Bents not cheapest beyond threshold",
-        gap_amount_gbp: signals.gapGbp,
-        context: { gapPercent: signals.gapPercent, bentsPrice: row.bentsRetailPrice, competitorPrice: signals.lowestTrusted.price }
-      });
-    }
-    if (signals.promoDiscrepancy) {
-      await upsertAlert({
-        dedupe_key: `promo-discrepancy:${row.id}`,
-        product_id: row.id,
-        reason: "Promo discrepancy",
-        context: { sku: row.internalSku }
-      });
-    }
-    if (signals.stale) {
-      await upsertAlert({
-        dedupe_key: `stale:${row.id}`,
-        product_id: row.id,
-        reason: "Stale checks",
-        context: { staleHours: runtime.scrapeDefaults.staleCheckHours }
-      });
-    }
-  }
-}
-
-export async function runCompetitorRefresh(options: RefreshOptions = {}): Promise<RefreshSummary> {
-  const failures: RefreshFailure[] = [];
-  let processed = 0;
-  let succeeded = 0;
-  let suspicious = 0;
-
+export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Promise<{ runId?: string; queued: number; total: number; }> {
   const runtime = await getRuntimeSettings();
   const targets = await buildTargets(options, runtime);
   const runId = await createRefreshRun({
     trigger_source: options.triggerSource ?? "manual",
     schedule_mode: options.scheduleMode ?? "manual",
-    metadata: { targetCount: targets.length }
+    total: targets.length,
+    metadata: { targetCount: targets.length, pending: targets.length }
   });
 
-  for (const batch of chunk(targets, getBatchSize(runtime.scrapeDefaults.batchSize, options.batchSize))) {
-    await Promise.all(batch.map(async (target) => {
-      processed += 1;
-      const started = Date.now();
-
-      if (!target.competitorUrl) {
-        const reason = "Missing competitor URL";
-        failures.push({ productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason });
-        await saveFailure(target, reason);
-        if (runId) {
-          await logRefreshRunItem({ run_id: runId, product_id: target.productId, competitor_price_id: target.mappingId, competitor_name: target.competitorName, competitor_url: target.competitorUrl, status: "missing_url", error_message: reason });
-        }
-        return;
-      }
-
-      try {
-        const adapter = selectAdapter(target.competitorUrl);
-        const result = await adapter.fetchPriceSignal({
-          sku: target.sku,
-          competitorUrl: target.competitorUrl,
-          productName: target.productName,
-          brand: target.brand
-        });
-        const saveResult = await saveSuccess(target, result, runtime);
-        succeeded += 1;
-        if (saveResult.suspicious) suspicious += 1;
-        if (runId) {
-          await logRefreshRunItem({
-            run_id: runId,
-            product_id: target.productId,
-            competitor_price_id: saveResult.mappingId,
-            competitor_name: target.competitorName,
-            competitor_url: target.competitorUrl,
-            status: saveResult.suspicious ? "suspicious" : "success",
-            suspicious: saveResult.suspicious,
-            extraction_source: result.extraction_source,
-            duration_ms: Date.now() - started,
-            metadata: { pricingStatus: saveResult.pricingStatus, acceptedCurrentPrice: saveResult.acceptedCurrentPrice }
-          });
-        }
-      } catch (error) {
-        const reason = (error as Error).message;
-        const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
-        failures.push({ productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason });
-        await saveFailure(target, reason, diagnostics);
-        if (runId) {
-          await logRefreshRunItem({
-            run_id: runId,
-            product_id: target.productId,
-            competitor_price_id: target.mappingId,
-            competitor_name: target.competitorName,
-            competitor_url: target.competitorUrl,
-            status: "failed",
-            duration_ms: Date.now() - started,
-            error_message: reason,
-            metadata: diagnostics
-          });
-        }
-      }
-    }));
+  if (runId) {
+    for (const target of targets) {
+      await logRefreshRunItem({
+        run_id: runId,
+        product_id: target.productId,
+        competitor_price_id: target.mappingId,
+        competitor_name: target.competitorName,
+        competitor_url: target.competitorUrl,
+        status: "queued",
+        metadata: { target }
+      });
+    }
   }
 
-  await generateOperationalAlerts(runtime);
+  return { runId: runId ?? undefined, queued: targets.length, total: targets.length };
+}
 
-  const summary = {
-    total: targets.length,
-    processed,
-    succeeded,
-    failed: failures.length,
-    suspicious,
+async function readQueuedTarget(runId: string): Promise<QueuedTarget | null> {
+  const rows = await listQueuedRefreshRunItems(runId, 1);
+  const row = rows[0];
+  if (!row) return null;
+  const target = (row.metadata?.target ?? null) as RefreshTarget | null;
+  if (!target) return null;
+  return { queueItemId: row.id, runId, target };
+}
+
+async function updateRunCounts(runId: string, update: { succeeded?: number; failed?: number; suspicious?: number; processed?: number; pending?: number; total?: number; }) {
+  const run = await getRefreshRun(runId);
+  if (!run) return;
+  const pending = update.pending ?? Math.max(run.total - (run.processed + (update.processed ?? 0)), 0);
+  const next = {
+    total: update.total ?? run.total,
+    processed: run.processed + (update.processed ?? 0),
+    succeeded: run.succeeded + (update.succeeded ?? 0),
+    failed: run.failed + (update.failed ?? 0),
+    suspicious: run.suspicious + (update.suspicious ?? 0),
+    metadata: { pending }
+  };
+  await updateRefreshRun(runId, next);
+}
+
+export async function processOneQueuedRefresh(runId: string): Promise<RefreshSummary> {
+  const queued = await readQueuedTarget(runId);
+  if (!queued) {
+    const run = await getRefreshRun(runId);
+    return {
+      total: run?.total ?? 0,
+      processed: run?.processed ?? 0,
+      succeeded: run?.succeeded ?? 0,
+      failed: run?.failed ?? 0,
+      suspicious: run?.suspicious ?? 0,
+      failures: [],
+      runId,
+      pending: 0
+    };
+  }
+
+  const runtime = await getRuntimeSettings();
+  const started = Date.now();
+  const failures: RefreshFailure[] = [];
+
+  if (!queued.target.competitorUrl) {
+    const reason = "Missing competitor URL";
+    failures.push({ productId: queued.target.productId, sku: queued.target.sku, competitorUrl: queued.target.competitorUrl, reason });
+    await saveFailure(queued.target, reason);
+    await updateRefreshRunItem(queued.queueItemId, {
+      status: "missing_url",
+      error_message: reason,
+      checked_at: new Date().toISOString(),
+      duration_ms: Date.now() - started
+    });
+    await updateRunCounts(runId, { failed: 1, processed: 1 });
+  } else {
+    try {
+      const adapter = selectAdapter(queued.target.competitorUrl);
+      const result = await adapter.fetchPriceSignal({
+        sku: queued.target.sku,
+        competitorUrl: queued.target.competitorUrl,
+        productName: queued.target.productName,
+        brand: queued.target.brand
+      });
+      const saveResult = await saveSuccess(queued.target, result, runtime);
+      await updateRefreshRunItem(queued.queueItemId, {
+        status: saveResult.suspicious ? "suspicious" : "success",
+        suspicious: saveResult.suspicious,
+        extraction_source: result.extraction_source,
+        competitor_price_id: saveResult.mappingId,
+        checked_at: new Date().toISOString(),
+        duration_ms: Date.now() - started,
+        metadata: { pricingStatus: saveResult.pricingStatus, acceptedCurrentPrice: saveResult.acceptedCurrentPrice }
+      });
+      await updateRunCounts(runId, { succeeded: 1, suspicious: saveResult.suspicious ? 1 : 0, processed: 1 });
+    } catch (error) {
+      const reason = (error as Error).message;
+      const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
+      failures.push({ productId: queued.target.productId, sku: queued.target.sku, competitorUrl: queued.target.competitorUrl, reason });
+      await saveFailure(queued.target, reason, diagnostics);
+      await updateRefreshRunItem(queued.queueItemId, {
+        status: "failed",
+        error_message: reason,
+        checked_at: new Date().toISOString(),
+        duration_ms: Date.now() - started,
+        metadata: diagnostics
+      });
+      await updateRunCounts(runId, { failed: 1, processed: 1 });
+    }
+  }
+
+  const [run, pendingRows] = await Promise.all([getRefreshRun(runId), listQueuedRefreshRunItems(runId, 1)]);
+  const pending = pendingRows.length > 0 ? (run ? Math.max(run.total - run.processed, 0) : 1) : 0;
+
+  const summary: RefreshSummary = {
+    total: run?.total ?? 0,
+    processed: run?.processed ?? 0,
+    succeeded: run?.succeeded ?? 0,
+    failed: run?.failed ?? 0,
+    suspicious: run?.suspicious ?? 0,
     failures,
-    runId: runId ?? undefined
+    runId,
+    pending
   };
 
-  if (runId) {
-    await completeRefreshRun(runId, summary);
+  if (pending === 0 && runId) {
+    await completeRefreshRun(runId, {
+      total: summary.total,
+      processed: summary.processed,
+      succeeded: summary.succeeded,
+      failed: summary.failed,
+      suspicious: summary.suspicious,
+      metadata: { pending: 0 }
+    });
     await logActivity({
       event_type: "refresh_run_completed",
       entity_type: "refresh_run",
       entity_id: runId,
       summary: `Refresh run completed (${summary.succeeded} success, ${summary.failed} failed, ${summary.suspicious} suspicious).`,
-      metadata: summary
+      metadata: summary as unknown as Record<string, unknown>
     });
   }
 
   return summary;
+}
+
+export async function runCompetitorRefresh(options: RefreshOptions = {}): Promise<RefreshSummary> {
+  const queued = await enqueueCompetitorRefresh(options);
+  if (!queued.runId) {
+    return { total: queued.total, processed: 0, succeeded: 0, failed: 0, suspicious: 0, failures: [] };
+  }
+  return processOneQueuedRefresh(queued.runId);
 }

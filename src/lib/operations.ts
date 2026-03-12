@@ -59,7 +59,7 @@ export async function updateAlertStatus(id: string, status: "new" | "acknowledge
   });
 }
 
-export async function createRefreshRun(input: { trigger_source: string; schedule_mode: string; metadata?: Record<string, unknown> }) {
+export async function createRefreshRun(input: { trigger_source: string; schedule_mode: string; metadata?: Record<string, unknown>; total?: number; processed?: number; succeeded?: number; failed?: number; suspicious?: number; }) {
   const rows = await supabaseRequest<RefreshRunRecord[]>({
     table: "refresh_runs",
     method: "POST",
@@ -67,6 +67,15 @@ export async function createRefreshRun(input: { trigger_source: string; schedule
     body: { ...input, started_at: new Date().toISOString() }
   });
   return rows[0]?.id;
+}
+
+export async function updateRefreshRun(runId: string, summary: { total?: number; processed?: number; succeeded?: number; failed?: number; suspicious?: number; metadata?: Record<string, unknown> }) {
+  await supabaseRequest<unknown[]>({
+    table: "refresh_runs",
+    method: "PATCH",
+    query: new URLSearchParams({ id: `eq.${runId}` }),
+    body: { ...summary, metadata: summary.metadata }
+  });
 }
 
 export async function completeRefreshRun(runId: string, summary: { total: number; processed: number; succeeded: number; failed: number; suspicious: number; metadata?: Record<string, unknown> }) {
@@ -79,12 +88,13 @@ export async function completeRefreshRun(runId: string, summary: { total: number
 }
 
 export async function logRefreshRunItem(input: {
+  id?: string;
   run_id: string;
   product_id: string;
   competitor_price_id?: string;
   competitor_name?: string;
   competitor_url?: string;
-  status: CheckStatus | "missing_url";
+  status: CheckStatus | "missing_url" | "queued" | "processing";
   suspicious?: boolean;
   duration_ms?: number;
   error_message?: string;
@@ -92,6 +102,51 @@ export async function logRefreshRunItem(input: {
   metadata?: Record<string, unknown>;
 }) {
   await supabaseRequest<unknown[]>({ table: "refresh_run_items", method: "POST", body: { ...input, checked_at: new Date().toISOString() } });
+}
+
+export interface RefreshRunRow {
+  id: string;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  suspicious: number;
+}
+
+export interface RefreshRunItemRow {
+  id: string;
+  run_id: string;
+  product_id: string;
+  competitor_price_id: string | null;
+  competitor_name: string | null;
+  competitor_url: string | null;
+  status: string;
+  suspicious: boolean;
+  metadata: Record<string, unknown> | null;
+}
+
+export async function getRefreshRun(runId: string) {
+  const rows = await supabaseRequest<RefreshRunRow[]>({
+    table: "refresh_runs",
+    query: new URLSearchParams({ select: "id,total,processed,succeeded,failed,suspicious", id: `eq.${runId}`, limit: "1" })
+  });
+  return rows[0] ?? null;
+}
+
+export async function listQueuedRefreshRunItems(runId: string, limit = 1) {
+  return supabaseRequest<RefreshRunItemRow[]>({
+    table: "refresh_run_items",
+    query: new URLSearchParams({ select: "id,run_id,product_id,competitor_price_id,competitor_name,competitor_url,status,suspicious,metadata", run_id: `eq.${runId}`, status: "eq.queued", order: "checked_at.asc", limit: String(limit) })
+  });
+}
+
+export async function updateRefreshRunItem(id: string, updates: Partial<RefreshRunItemRow> & { checked_at?: string; duration_ms?: number; error_message?: string; extraction_source?: string; metadata?: Record<string, unknown>; competitor_price_id?: string; competitor_name?: string; competitor_url?: string; status?: string; suspicious?: boolean; }) {
+  return supabaseRequest<unknown[]>({
+    table: "refresh_run_items",
+    method: "PATCH",
+    query: new URLSearchParams({ id: `eq.${id}` }),
+    body: updates
+  });
 }
 
 export interface SavedViewState {
