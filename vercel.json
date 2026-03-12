@@ -1,12 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/competitor-check?mode=priority",
-      "schedule": "0 */4 * * *"
-    },
-    {
       "path": "/api/cron/competitor-check?mode=daily",
-      "schedule": "10 4 * * *"
+      "schedule": "0 6 * * *"
     }
   ]
 }
