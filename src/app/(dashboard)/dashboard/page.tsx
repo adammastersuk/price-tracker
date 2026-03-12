@@ -38,6 +38,7 @@ export default function DashboardPage() {
   const [autoAdjustMessage, setAutoAdjustMessage] = useState("");
   const [alerts, setAlerts] = useState<Array<{ id: string; reason: string; competitor_name?: string; status: string; created_at: string; gap_amount_gbp?: number; product_id?: string }>>([]);
   const [healthRows, setHealthRows] = useState<Array<{ competitorName: string; health: string; successRate: number; failureRate: number; suspiciousCount: number; lastSuccessfulRun: string | null }>>([]);
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [activity, setActivity] = useState<Array<{ id: string; summary: string; created_at: string }>>([]);
 
   useEffect(() => {
@@ -142,11 +143,11 @@ export default function DashboardPage() {
             value={filters.search}
             onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
           />
-          <MultiSelectFilter label="Buyers" allLabel="All buyers" options={choices.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} />
-          <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} />
-          <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={choices.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} />
-          <MultiSelectFilter label="Competitors" allLabel="All competitors" options={choices.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} />
-          <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...choices.statuses, ...choices.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} />
+          <MultiSelectFilter label="Buyers" allLabel="All buyers" options={choices.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} open={openFilter === "buyers"} onOpenChange={(open) => setOpenFilter(open ? "buyers" : null)} />
+          <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} open={openFilter === "departments"} onOpenChange={(open) => setOpenFilter(open ? "departments" : null)} />
+          <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={choices.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} open={openFilter === "suppliers"} onOpenChange={(open) => setOpenFilter(open ? "suppliers" : null)} />
+          <MultiSelectFilter label="Competitors" allLabel="All competitors" options={choices.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} open={openFilter === "competitors"} onOpenChange={(open) => setOpenFilter(open ? "competitors" : null)} />
+          <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...choices.statuses, ...choices.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} open={openFilter === "statuses"} onOpenChange={(open) => setOpenFilter(open ? "statuses" : null)} />
         </CardContent>
       </Card>
       {autoAdjustMessage ? <p className="text-xs text-slate-500">{autoAdjustMessage}</p> : null}

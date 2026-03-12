@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input } from "@/components/ui/primitives";
 
 interface MultiSelectFilterProps {
@@ -9,6 +9,8 @@ interface MultiSelectFilterProps {
   selected: string[];
   onChange: (next: string[]) => void;
   allLabel: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 function summarize(label: string, allLabel: string, selected: string[]) {
@@ -18,9 +20,26 @@ function summarize(label: string, allLabel: string, selected: string[]) {
   return `${selected.length} ${label.toLowerCase()} selected`;
 }
 
-export function MultiSelectFilter({ label, options, selected, onChange, allLabel }: MultiSelectFilterProps) {
-  const [open, setOpen] = useState(false);
+export function MultiSelectFilter({ label, options, selected, onChange, allLabel, open: controlledOpen, onOpenChange }: MultiSelectFilterProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = useCallback((next: boolean) => {
+    if (controlledOpen === undefined) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  }, [controlledOpen, onOpenChange]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open, setOpen]);
 
   const visibleOptions = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -33,8 +52,8 @@ export function MultiSelectFilter({ label, options, selected, onChange, allLabel
   };
 
   return (
-    <div className="relative">
-      <Button type="button" className="h-10 w-full justify-between bg-white text-left text-slate-800 border" onClick={() => setOpen((v) => !v)}>
+    <div ref={rootRef} className="relative">
+      <Button type="button" className="h-10 w-full justify-between bg-white text-left text-slate-800 border" onClick={() => setOpen(!open)}>
         <span className="truncate">{summarize(label, allLabel, selected)}</span>
         <span className="text-xs text-slate-500">▾</span>
       </Button>
