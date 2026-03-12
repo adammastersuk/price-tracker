@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createBuyer, getSettingsConfig, updateBuyer } from "@/lib/db";
+import { ensureUniqueSetting } from "@/lib/settings-validation";
 
 export async function GET() {
   try {
@@ -18,6 +19,7 @@ export async function POST(request: NextRequest) {
     const departmentIds = Array.isArray(payload?.departmentIds) ? payload.departmentIds.map((v: unknown) => String(v)) : [];
     if (!name) return NextResponse.json({ error: "Buyer name is required" }, { status: 400 });
 
+    await ensureUniqueSetting("buyer", name);
     const created = await createBuyer(name, isActive);
     if (departmentIds.length) {
       await updateBuyer(created[0].id, { department_ids: departmentIds });
