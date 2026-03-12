@@ -195,7 +195,7 @@ export default function DashboardPage() {
                       <td className="px-3 py-2"><WorkflowChip status={item.row.actionWorkflowStatus} /></td>
                       <td className="px-3 py-2">
                         <div className="flex flex-col gap-2">
-                          <Link href={`/products?search=${encodeURIComponent(item.row.internalSku)}`} className="text-sm text-primary">Review now</Link>
+                          <Link href={`/products?search=${encodeURIComponent(item.row.internalSku)}&sku=${encodeURIComponent(item.row.internalSku)}&productId=${encodeURIComponent(item.row.id)}`} className="text-sm text-primary">Review now</Link>
                           <Button
                             className="bg-slate-700 px-2 py-1 text-xs"
                             disabled={refreshingId === item.row.id}
