@@ -8,7 +8,7 @@ import {
   type CompetitorPriceInput,
   getRuntimeSettings
 } from "@/lib/db";
-import { selectAdapter } from "@/lib/competitor-check/adapters";
+import { AdapterExtractionError, selectAdapter } from "@/lib/competitor-check/adapters";
 import { completeRefreshRun, createRefreshRun, logActivity, logRefreshRunItem, upsertAlert } from "@/lib/operations";
 import { rowCommercialSignals } from "@/lib/data-service";
 
@@ -244,7 +244,7 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
   return { suspicious, mappingId, acceptedCurrentPrice, pricingStatus };
 }
 
-async function saveFailure(target: RefreshTarget, reason: string) {
+async function saveFailure(target: RefreshTarget, reason: string, diagnostics?: Record<string, unknown>) {
   if (!target.mappingId) return;
   await updateCompetitorPrice(target.mappingId, {
     last_checked_at: new Date().toISOString(),
@@ -253,7 +253,8 @@ async function saveFailure(target: RefreshTarget, reason: string) {
     pricing_status: "Needs review",
     extraction_metadata: {
       trust_rejected: true,
-      failure_reason: reason
+      failure_reason: reason,
+      ...(diagnostics ?? {})
     }
   });
 
@@ -355,8 +356,9 @@ export async function runCompetitorRefresh(options: RefreshOptions = {}): Promis
         }
       } catch (error) {
         const reason = (error as Error).message;
+        const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
         failures.push({ productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason });
-        await saveFailure(target, reason);
+        await saveFailure(target, reason, diagnostics);
         if (runId) {
           await logRefreshRunItem({
             run_id: runId,
@@ -366,7 +368,8 @@ export async function runCompetitorRefresh(options: RefreshOptions = {}): Promis
             competitor_url: target.competitorUrl,
             status: "failed",
             duration_ms: Date.now() - started,
-            error_message: reason
+            error_message: reason,
+            metadata: diagnostics
           });
         }
       }

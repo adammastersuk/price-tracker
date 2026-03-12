@@ -24,6 +24,13 @@ export interface CompetitorAdapter {
   fetchPriceSignal: (input: AdapterInput) => Promise<AdapterResult>;
 }
 
+export class AdapterExtractionError extends Error {
+  constructor(message: string, public diagnostics: Record<string, unknown> = {}) {
+    super(message);
+    this.name = "AdapterExtractionError";
+  }
+}
+
 function parseCurrencyLike(value: string): number | null {
   const normalized = value.replace(/[^\d.,]/g, "").replace(/,/g, "");
   const parsed = Number.parseFloat(normalized);
@@ -90,6 +97,224 @@ function hostFromUrl(raw: string): string {
     return new URL(raw).hostname.toLowerCase();
   } catch {
     return "";
+  }
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&pound;/gi, "£")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"');
+}
+
+function stripTags(value: string): string {
+  return decodeHtmlEntities(value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+
+function parseStockFromText(value: string): "In Stock" | "Unknown" {
+  if (/\bin\s+stock\b/i.test(value)) return "In Stock";
+  return "Unknown";
+}
+
+function findPurchaseArea(html: string) {
+  const addToCartMatch = html.match(/<(section|div|form)[^>]*(?:product|purchase|buy|basket|cart)[^>]*>[\s\S]{0,2000}?(?:add\s*to\s*(?:basket|cart)|buy\s*now)[\s\S]{0,2000}?<\/\1>/i);
+  if (addToCartMatch) {
+    return {
+      text: stripTags(addToCartMatch[0]),
+      found: true,
+      source: "purchase_block"
+    };
+  }
+
+  const fallback = html.match(/(?:add\s*to\s*(?:basket|cart)|buy\s*now)[\s\S]{0,400}/i);
+  if (fallback) {
+    return {
+      text: stripTags(fallback[0]),
+      found: true,
+      source: "purchase_cta_context"
+    };
+  }
+
+  return { text: "", found: false, source: "none" };
+}
+
+class CharliesAdapter implements CompetitorAdapter {
+  name = "charlies";
+
+  supports(url: string) {
+    const host = hostFromUrl(url) || url;
+    return /charlies\.co\.uk/i.test(host);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Charlies adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      "span.price.price-base.price--withTax",
+      "[data-product-price-with-tax]",
+      "stock text near purchase area"
+    ];
+
+    const selectorDiagnostics: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
+
+    const spanMatch = html.match(/<span[^>]*class=["'][^"']*\bprice\b[^"']*\bprice-base\b[^"']*\bprice--withTax\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+    if (spanMatch?.[1]) {
+      const extractedText = stripTags(spanMatch[1]);
+      const parsed = parseCurrencyLike(extractedText);
+      selectorDiagnostics["span.price.price-base.price--withTax"] = true;
+      candidateValues.push({ source_selector: "span.price.price-base.price--withTax", extracted_text: extractedText, parsed });
+    } else {
+      selectorDiagnostics["span.price.price-base.price--withTax"] = false;
+    }
+
+    const attributeMatch = html.match(/data-product-price-with-tax\s*=\s*["']([^"']+)["']/i);
+    if (attributeMatch?.[1]) {
+      const extractedText = decodeHtmlEntities(attributeMatch[1]).trim();
+      const parsed = parseCurrencyLike(extractedText);
+      selectorDiagnostics["[data-product-price-with-tax]"] = true;
+      candidateValues.push({ source_selector: "[data-product-price-with-tax]", extracted_text: extractedText, parsed });
+    } else {
+      selectorDiagnostics["[data-product-price-with-tax]"] = false;
+    }
+
+    const purchaseArea = findPurchaseArea(html);
+    const stockText = purchaseArea.text.match(/\bin\s+stock\b/i)?.[0] ?? "";
+
+    const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
+    if (!accepted || accepted.parsed === null) {
+      const failureMessage = stockText ? "Stock detected but no valid price found" : "Charlies adapter could not find price selector";
+      throw new AdapterExtractionError(failureMessage, {
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorDiagnostics,
+        candidate_values_found: candidateValues,
+        accepted_value: null,
+        rejected_values: candidateValues,
+        rejection_reasons: ["required_price_selector_missing_or_invalid"],
+        stock_text_found: stockText || null,
+        purchase_area_detected: purchaseArea.found
+      });
+    }
+
+    const wasMatch = html.match(/(?:was|rrp)[^£]{0,80}(£|&pound;)\s?([\d,.]{1,12})/i);
+    const wasPrice = parseCurrencyLike(wasMatch?.[0] ?? "");
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: wasPrice,
+      competitor_stock_status: parseStockFromText(stockText),
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "charlies_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        stock_text_found: stockText || null,
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorDiagnostics,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: [],
+        purchase_area_detected: purchaseArea.found,
+        purchase_area_source: purchaseArea.source
+      }
+    };
+  }
+}
+
+class WhitehallAdapter implements CompetitorAdapter {
+  name = "whitehall";
+
+  supports(url: string) {
+    const host = hostFromUrl(url) || url;
+    return /whitehallgardencentre\.co\.uk/i.test(host) || /whitehall/i.test(host);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Whitehall adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      "p.product-details-price__regular-price--sale",
+      "s.product-details-price__sale-full-price",
+      "stock text near purchase area"
+    ];
+    const selectorsFound: Record<string, boolean> = {};
+
+    const saleMatch = html.match(/<p[^>]*class=["'][^"']*\bproduct-details-price__regular-price--sale\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
+    const saleText = saleMatch?.[1] ? stripTags(saleMatch[1]) : "";
+    selectorsFound["p.product-details-price__regular-price--sale"] = Boolean(saleText);
+
+    const purchaseArea = findPurchaseArea(html);
+    const stockText = purchaseArea.text.match(/\bin\s+stock\b/i)?.[0] ?? "";
+
+    const salePrice = parseCurrencyLike(saleText);
+    if (salePrice === null) {
+      const failureMessage = stockText ? "Stock detected but no valid price found" : "Whitehall sale price selector missing";
+      throw new AdapterExtractionError(failureMessage, {
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: saleText ? [{ source_selector: "p.product-details-price__regular-price--sale", extracted_text: saleText, parsed: salePrice }] : [],
+        accepted_value: null,
+        rejected_values: saleText ? [{ source_selector: "p.product-details-price__regular-price--sale", extracted_text: saleText, parsed: salePrice }] : [],
+        rejection_reasons: ["required_sale_price_selector_missing_or_invalid"],
+        stock_text_found: stockText || null,
+        purchase_area_detected: purchaseArea.found
+      });
+    }
+
+    const wasMatch = html.match(/<s[^>]*class=["'][^"']*\bproduct-details-price__sale-full-price\b[^"']*["'][^>]*>([\s\S]*?)<\/s>/i);
+    const wasText = wasMatch?.[1] ? stripTags(wasMatch[1]) : "";
+    selectorsFound["s.product-details-price__sale-full-price"] = Boolean(wasText);
+    const wasPrice = parseCurrencyLike(wasText);
+
+    return {
+      competitor_current_price: salePrice,
+      competitor_promo_price: null,
+      competitor_was_price: wasPrice,
+      competitor_stock_status: parseStockFromText(stockText),
+      match_confidence: "High",
+      raw_price_text: saleText,
+      extraction_source: "whitehall_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: saleText,
+        source_selector: "p.product-details-price__regular-price--sale",
+        stock_text_found: stockText || null,
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: [
+          { source_selector: "p.product-details-price__regular-price--sale", extracted_text: saleText, parsed: salePrice },
+          ...(wasText ? [{ source_selector: "s.product-details-price__sale-full-price", extracted_text: wasText, parsed: wasPrice }] : [])
+        ],
+        accepted_value: salePrice,
+        rejected_values: [],
+        rejection_reasons: [],
+        purchase_area_detected: purchaseArea.found,
+        purchase_area_source: purchaseArea.source
+      }
+    };
   }
 }
 
@@ -393,6 +618,8 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
   supports(url: string) {
     const host = hostFromUrl(url) || url;
     if (/gardenfurnitureworld\.co\.uk/i.test(host)) return false;
+    if (/charlies\.co\.uk/i.test(host)) return false;
+    if (/whitehallgardencentre\.co\.uk|whitehall/i.test(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -458,6 +685,8 @@ export class RetailerPlaceholderAdapter implements CompetitorAdapter {
 }
 
 const adapters: CompetitorAdapter[] = [
+  new CharliesAdapter(),
+  new WhitehallAdapter(),
   new GardenFurnitureWorldAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
