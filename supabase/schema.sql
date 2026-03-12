@@ -75,3 +75,75 @@ drop trigger if exists trg_products_updated_at on public.products;
 create trigger trg_products_updated_at
 before update on public.products
 for each row execute procedure public.set_updated_at();
+
+create table if not exists public.buyers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.departments (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.buyer_departments (
+  id uuid primary key default gen_random_uuid(),
+  buyer_id uuid not null references public.buyers(id) on delete cascade,
+  department_id uuid not null references public.departments(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  unique (buyer_id, department_id)
+);
+
+create table if not exists public.competitors (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  base_url text not null,
+  domain text not null,
+  adapter_key text not null,
+  is_enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.app_settings (
+  key text primary key,
+  value jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_buyer_departments_buyer on public.buyer_departments(buyer_id);
+create index if not exists idx_buyer_departments_department on public.buyer_departments(department_id);
+create index if not exists idx_competitors_enabled on public.competitors(is_enabled);
+
+create or replace function public.set_app_settings_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_buyers_updated_at on public.buyers;
+create trigger trg_buyers_updated_at
+before update on public.buyers
+for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_departments_updated_at on public.departments;
+create trigger trg_departments_updated_at
+before update on public.departments
+for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_competitors_updated_at on public.competitors;
+create trigger trg_competitors_updated_at
+before update on public.competitors
+for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_app_settings_updated_at on public.app_settings;
+create trigger trg_app_settings_updated_at
+before update on public.app_settings
+for each row execute procedure public.set_app_settings_updated_at();

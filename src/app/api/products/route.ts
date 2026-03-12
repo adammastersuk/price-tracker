@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createProduct, deleteProduct, findProductBySku, getProductById, getProducts, mergeProducts, updateProduct } from "@/lib/db";
+import { normalizeBuyerDepartmentAndCompetitor } from "@/lib/settings-normalizers";
 
 function isDuplicateKeyError(errorMessage: string): boolean {
   return errorMessage.includes("duplicate key") || errorMessage.includes("23505");
@@ -60,6 +61,11 @@ export async function PUT(request: NextRequest) {
     }
 
     const bents = Number.isFinite(updates.bents_price) ? Number(updates.bents_price) : existing.bentsRetailPrice;
+    const normalized = await normalizeBuyerDepartmentAndCompetitor({
+      buyer: typeof updates.buyer === "string" ? updates.buyer : undefined,
+      department: typeof updates.department === "string" ? updates.department : undefined
+    });
+
     const cost = updates.cost_price === null
       ? null
       : Number.isFinite(updates.cost_price)
@@ -69,7 +75,7 @@ export async function PUT(request: NextRequest) {
       ? null
       : Number((((bents - cost) / bents) * 100).toFixed(2));
 
-    const updated = await updateProduct(payload.id, { ...updates, sku: requestedSku, margin_percent: marginPercent });
+    const updated = await updateProduct(payload.id, { ...updates, buyer: normalized.buyer, department: normalized.department, sku: requestedSku, margin_percent: marginPercent });
     return NextResponse.json({ data: updated[0] });
   } catch (error) {
     const message = (error as Error).message;

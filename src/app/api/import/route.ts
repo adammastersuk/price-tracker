@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { insertPriceHistory, upsertCompetitorPrice, upsertProductBySku } from "@/lib/db";
+import { normalizeBuyerDepartmentAndCompetitor } from "@/lib/settings-normalizers";
 
 interface ParsedRow {
   rowNumber: number;
@@ -124,28 +125,34 @@ export async function POST(request: NextRequest) {
 
     for (const row of parsed.rows) {
       try {
+        const normalized = await normalizeBuyerDepartmentAndCompetitor({
+          buyer: row.buyer,
+          department: row.department,
+          competitorName: row.competitorName
+        });
+
         const upserted = await upsertProductBySku({
           sku: row.sku,
           name: row.productName,
           bents_price: row.bentsPrice,
           product_url: row.bentsUrl,
-          buyer: row.buyer,
+          buyer: normalized.buyer,
           supplier: row.supplier,
-          department: row.department,
+          department: normalized.department,
           cost_price: row.cost,
           margin_percent: calculateMarginPercent(row.bentsPrice, row.cost)
         });
         const productId = upserted[0].id;
         await upsertCompetitorPrice({
           product_id: productId,
-          competitor_name: row.competitorName,
+          competitor_name: normalized.competitorName ?? row.competitorName,
           competitor_url: row.competitorUrl,
           pricing_status: "Needs review"
         });
 
         await insertPriceHistory({
           product_id: productId,
-          competitor_name: row.competitorName
+          competitor_name: normalized.competitorName ?? row.competitorName
         });
 
         imported += 1;
