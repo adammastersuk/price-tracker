@@ -128,6 +128,15 @@ function stripTags(value: string): string {
   return decodeHtmlEntities(value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
+function parseWooCommerceAmount(value: string): number | null {
+  const normalized = decodeHtmlEntities(value)
+    .replace(/\u00a0/g, " ")
+    .replace(/£|GBP/gi, " ")
+    .trim();
+  const numberMatch = normalized.match(/\d[\d,]*(?:\.\d{1,2})?/);
+  return numberMatch ? parseCurrencyLike(numberMatch[0]) : null;
+}
+
 
 function parseStockFromText(value: string): "In Stock" | "Unknown" {
   if (/\bin\s+stock\b/i.test(value)) return "In Stock";
@@ -703,6 +712,106 @@ class RuxleyManorAdapter implements CompetitorAdapter {
   }
 }
 
+class GatesGardenCentreAdapter implements CompetitorAdapter {
+  name = "gates-garden-centre";
+
+  supports(url: string) {
+    const host = hostFromUrl(url) || url;
+    return /gatesgardencentre\.co\.uk/i.test(host);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Gates adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      "p.price .woocommerce-Price-amount.amount",
+      ".summary .price .woocommerce-Price-amount.amount",
+      ".woocommerce-Price-amount.amount"
+    ];
+
+    const selectorPatterns: Array<{ selector: string; pattern: RegExp }> = [
+      {
+        selector: "p.price .woocommerce-Price-amount.amount",
+        pattern:
+          /<p[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>[\s\S]{0,400}?<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*\bamount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+      },
+      {
+        selector: ".summary .price .woocommerce-Price-amount.amount",
+        pattern:
+          /<[^>]*class=["'][^"']*\bsummary\b[^"']*["'][^>]*>[\s\S]{0,2000}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>[\s\S]{0,600}?<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*\bamount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+      },
+      {
+        selector: ".woocommerce-Price-amount.amount",
+        pattern:
+          /<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*\bamount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+      }
+    ];
+
+    const selectorsFound: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
+
+    for (const { selector, pattern } of selectorPatterns) {
+      const match = html.match(pattern);
+      const extractedText = match?.[1] ? stripTags(match[1]) : "";
+      const parsed = extractedText ? parseWooCommerceAmount(extractedText) : null;
+      selectorsFound[selector] = Boolean(extractedText);
+      if (extractedText) {
+        candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
+      }
+    }
+
+    const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
+    if (!accepted || accepted.parsed === null) {
+      throw new AdapterExtractionError(
+        `Gates Garden Centre price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}.`,
+        {
+          adapter_attempted: this.name,
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          accepted_value: null,
+          rejected_values: candidateValues,
+          rejection_reasons: ["required_woocommerce_price_selector_missing_or_invalid"]
+        }
+      );
+    }
+
+    const stock = /\bavailability\s*:\s*out\s+of\s+stock\b|\bout\s+of\s+stock\b/i.test(html)
+      ? "Out of Stock"
+      : /\bavailability\s*:\s*in\s+stock\b|\bin\s+stock\b/i.test(html)
+        ? "In Stock"
+        : "Unknown";
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: null,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "gates_garden_centre_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: []
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -734,6 +843,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
   supports(url: string) {
     const host = hostFromUrl(url) || url;
     if (/gardenfurnitureworld\.co\.uk/i.test(host)) return false;
+    if (/gatesgardencentre\.co\.uk/i.test(host)) return false;
     if (/charlies\.co\.uk/i.test(host)) return false;
     if (/whitehallgardencentre\.co\.uk|whitehall/i.test(host)) return false;
     if (isRuxleyManorHost(host)) return false;
@@ -805,6 +915,7 @@ const adapters: CompetitorAdapter[] = [
   new CharliesAdapter(),
   new WhitehallAdapter(),
   new GardenFurnitureWorldAdapter(),
+  new GatesGardenCentreAdapter(),
   new RuxleyManorAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
