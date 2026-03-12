@@ -38,6 +38,7 @@ interface CompetitorPriceRecord {
   raw_price_text: string | null;
   extraction_source: string | null;
   suspicious_change_flag: boolean | null;
+  extraction_metadata: Record<string, unknown> | null;
 }
 
 interface ProductNoteRecord { id: string; note: string; owner: string | null; workflow_status: string | null; created_at: string; }
@@ -84,9 +85,17 @@ export interface CompetitorPriceInput {
   raw_price_text?: string;
   extraction_source?: string;
   suspicious_change_flag?: boolean;
+  extraction_metadata?: Record<string, unknown>;
 }
 
 const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
+
+function isTrustworthyListing(comp: CompetitorListing): boolean {
+  if (comp.lastCheckStatus !== "success") return false;
+  if (comp.competitorCurrentPrice === null || !Number.isFinite(comp.competitorCurrentPrice) || comp.competitorCurrentPrice <= 0) return false;
+  if ((comp.extractionMetadata?.trust_rejected as boolean | undefined) === true) return false;
+  return true;
+}
 
 function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
   const sortedComps = [...(product.competitor_prices ?? [])].sort((a, b) =>
@@ -111,16 +120,13 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     rawPriceText: comp.raw_price_text ?? "",
     extractionSource: comp.extraction_source ?? "",
     suspiciousChangeFlag: comp.suspicious_change_flag ?? false,
+    extractionMetadata: comp.extraction_metadata ?? {},
     priceDifferenceGbp: comp.price_difference_gbp ?? null,
     priceDifferencePercent: comp.price_difference_percent ?? null,
     pricingStatus: (comp.pricing_status as PricingStatus) ?? "Needs review"
   }));
 
-  const validListings = competitorListings.filter((comp) =>
-    comp.competitorCurrentPrice !== null
-    && comp.lastCheckStatus !== "failed"
-    && comp.lastCheckStatus !== "suspicious"
-  );
+  const validListings = competitorListings.filter(isTrustworthyListing);
   const lowestValidListing = [...validListings].sort((a, b) =>
     (a.competitorCurrentPrice ?? Number.POSITIVE_INFINITY) - (b.competitorCurrentPrice ?? Number.POSITIVE_INFINITY)
   )[0] ?? null;

@@ -19,6 +19,7 @@ export interface CompetitorListing {
   checkErrorMessage: string;
   rawPriceText: string;
   extractionSource: string;
+  extractionMetadata: Record<string, unknown>;
   suspiciousChangeFlag: boolean;
   priceDifferenceGbp: number | null;
   priceDifferencePercent: number | null;

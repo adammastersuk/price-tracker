@@ -77,6 +77,7 @@ if (competitorCurrent !== null) {
       checkErrorMessage: "",
       rawPriceText: competitorCurrent ? `£${competitorCurrent}` : "",
       extractionSource: "seed",
+      extractionMetadata: {},
       suspiciousChangeFlag: false,
       priceDifferenceGbp: diffGbp,
       priceDifferencePercent: diffPct,

@@ -19,7 +19,11 @@ type SortDirection = "asc" | "desc";
 
 const competitorStatusLabel = (c: CompetitorListing) => {
   if (c.lastCheckStatus === "pending") return "Pending check";
-  if (c.lastCheckStatus === "failed") return "Failed check";
+  if (c.lastCheckStatus === "failed") return "Failed extraction";
+  if (c.lastCheckStatus === "suspicious") {
+    const retained = c.checkErrorMessage.toLowerCase().includes("retained");
+    return retained ? "Rejected low-confidence price (previous valid retained)" : "Suspicious extraction";
+  }
   if (c.competitorCurrentPrice === null) return "No price yet";
   return currency(c.competitorCurrentPrice);
 };
@@ -27,7 +31,12 @@ const competitorStatusLabel = (c: CompetitorListing) => {
 const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
 
 const competitorSummary = (row: TrackedProductRow) => {
-  const valid = row.competitorListings.filter((c) => c.competitorCurrentPrice !== null && c.lastCheckStatus === "success");
+  const valid = row.competitorListings.filter((c) =>
+    c.competitorCurrentPrice !== null
+    && c.competitorCurrentPrice > 0
+    && c.lastCheckStatus === "success"
+    && c.extractionMetadata?.trust_rejected !== true
+  );
   const lowest = [...valid].sort((a, b) => (a.competitorCurrentPrice ?? 0) - (b.competitorCurrentPrice ?? 0))[0];
   if (lowest) {
     return {

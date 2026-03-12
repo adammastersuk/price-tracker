@@ -37,15 +37,30 @@ interface PriceCandidate {
   source: string;
 }
 
+interface CandidateReview {
+  value: number;
+  score: number;
+  source: string;
+  reason: string;
+}
+
 const NEGATIVE_PRICE_CONTEXT = [
   "delivery",
   "orders over",
   "order over",
+  "over £",
+  "over &pound;",
   "finance",
   "per month",
   "monthly",
   "voucher",
+  "voucher code",
   "promo code",
+  "discount code",
+  "header",
+  "announcement",
+  "sitewide",
+  "strip",
   "newsletter",
   "free shipping",
   "free uk mainland"
@@ -140,6 +155,94 @@ function pickBestPrice(candidates: PriceCandidate[]) {
   return { best, alternates, rankedCount: ranked.length };
 }
 
+const GFW_BLOCKED_CONTEXT = [
+  /delivery/i,
+  /orders?\s+over/i,
+  /order\s+over/i,
+  /finance/i,
+  /per\s+month/i,
+  /monthly/i,
+  /voucher/i,
+  /promo\s*code/i,
+  /discount\s*code/i,
+  /sitewide/i,
+  /header/i,
+  /announcement/i,
+  /free\s+(?:delivery|shipping)/i
+];
+
+const GFW_PRODUCT_CONTEXT = [
+  /product\s*title/i,
+  /product-title/i,
+  /product\s*price/i,
+  /price\s*wrapper/i,
+  /price\s*block/i,
+  /was/i,
+  /now/i,
+  /add\s*to\s*basket/i,
+  /add-to-basket/i,
+  /quantity/i,
+  /preorder/i,
+  /itemprop="price"/i,
+  /"@type"\s*:\s*"product"/i
+];
+
+function summarizeCandidate(candidate: PriceCandidate, reason: string): CandidateReview {
+  return {
+    value: candidate.value,
+    score: candidate.score,
+    source: candidate.source,
+    reason
+  };
+}
+
+function reviewGardenFurnitureCandidates(candidates: PriceCandidate[]) {
+  const accepted: PriceCandidate[] = [];
+  const rejected: CandidateReview[] = [];
+
+  for (const candidate of candidates) {
+    const context = candidate.context.toLowerCase();
+    const blockedByContext = GFW_BLOCKED_CONTEXT.some((pattern) => pattern.test(context));
+    const productSignal = GFW_PRODUCT_CONTEXT.some((pattern) => pattern.test(context)) || candidate.source === "json_ld";
+
+    if (blockedByContext && !productSignal) {
+      rejected.push(summarizeCandidate(candidate, "blocked_context"));
+      continue;
+    }
+
+    const adjustedScore = candidate.score + (productSignal ? 5 : 0) - (blockedByContext ? 10 : 0);
+    const reviewed = { ...candidate, score: adjustedScore };
+
+    if (reviewed.score < 1) {
+      rejected.push(summarizeCandidate(reviewed, "low_confidence"));
+      continue;
+    }
+
+    accepted.push(reviewed);
+  }
+
+  const strongestSignal = accepted
+    .filter((candidate) => GFW_PRODUCT_CONTEXT.some((pattern) => pattern.test(candidate.context)) || candidate.source === "json_ld")
+    .sort((a, b) => b.score - a.score || b.value - a.value)[0] ?? null;
+
+  const lowStandalone = accepted
+    .filter((candidate) => candidate.value <= 120)
+    .sort((a, b) => a.value - b.value || b.score - a.score)[0] ?? null;
+
+  if (lowStandalone && strongestSignal && strongestSignal.value > lowStandalone.value * 1.8) {
+    rejected.push(summarizeCandidate(lowStandalone, "rejected_low_standalone_vs_product_signal"));
+    const filtered = accepted.filter((candidate) => candidate !== lowStandalone);
+    return {
+      accepted: filtered,
+      rejected,
+      forcedSuspicious: true,
+      forcedReason: "Low standalone token conflicts with stronger product price signals"
+    };
+  }
+
+  return { accepted, rejected, forcedSuspicious: false, forcedReason: "" };
+}
+
 class GardenFurnitureWorldAdapter implements CompetitorAdapter {
   name = "garden-furniture-world";
 
@@ -173,7 +276,8 @@ class GardenFurnitureWorldAdapter implements CompetitorAdapter {
         score: candidate.score + (/product|basket|add to basket|price|now|was/i.test(candidate.context) ? 4 : 0)
       }));
     const jsonCandidates = [...new Set(jsonPrices)].map((value) => ({ value, context: "json-ld", score: 9, source: "json_ld" }));
-    const { best, alternates, rankedCount } = pickBestPrice([...jsonCandidates, ...blockCandidates]);
+    const reviewed = reviewGardenFurnitureCandidates([...jsonCandidates, ...blockCandidates]);
+    const { best, alternates, rankedCount } = pickBestPrice(reviewed.accepted);
 
     const wasMatch = html.match(/(?:was|rrp)[^£]{0,50}(£|&pound;)\s?([\d,.]{1,12})/i);
     const was = parseCurrencyLike(wasMatch?.[0] ?? "");
@@ -195,7 +299,12 @@ class GardenFurnitureWorldAdapter implements CompetitorAdapter {
       metadata: {
         ranked_count: rankedCount,
         alternates,
-        promo_context: promoContext
+        promo_context: promoContext,
+        accepted_reason: best ? "product_context_signal" : "no_reliable_candidate",
+        rejected_candidates: reviewed.rejected,
+        forced_suspicious: reviewed.forcedSuspicious,
+        forced_suspicious_reason: reviewed.forcedReason,
+        selected_source: best?.source ?? null
       }
     };
   }
