@@ -593,6 +593,105 @@ class GardenFurnitureWorldAdapter implements CompetitorAdapter {
   }
 }
 
+class RuxleyManorAdapter implements CompetitorAdapter {
+  name = "ruxley-manor";
+
+  supports(url: string) {
+    return /ruxleymanor\.co\.uk/i.test(hostFromUrl(url) || url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Ruxley Manor adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      ".price-wrapper.now-price .price",
+      ".now-price .price",
+      ".prices .price"
+    ];
+
+    const selectorPatterns: Array<{ selector: string; pattern: RegExp }> = [
+      {
+        selector: ".price-wrapper.now-price .price",
+        pattern:
+          /<div[^>]*class=["'][^"']*\bprice-wrapper\b[^"']*\bnow-price\b[^"']*["'][^>]*>[\s\S]{0,500}?<span[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+      },
+      {
+        selector: ".now-price .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bnow-price\b[^"']*["'][^>]*>[\s\S]{0,500}?<span[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+      },
+      {
+        selector: ".prices .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprices\b[^"']*["'][^>]*>[\s\S]{0,500}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i
+      }
+    ];
+
+    const selectorsFound: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
+
+    for (const { selector, pattern } of selectorPatterns) {
+      const match = html.match(pattern);
+      const extractedText = match?.[1] ? stripTags(match[1]) : "";
+      const parsed = extractedText ? parseGbpCurrency(extractedText) : null;
+      selectorsFound[selector] = Boolean(extractedText);
+      if (extractedText) {
+        candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
+      }
+    }
+
+    const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
+    if (!accepted || accepted.parsed === null) {
+      throw new AdapterExtractionError(
+        `Ruxley Manor price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}`,
+        {
+          adapter_attempted: this.name,
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          accepted_value: null,
+          rejected_values: candidateValues,
+          rejection_reasons: ["required_now_price_selector_missing_or_invalid"]
+        }
+      );
+    }
+
+    const stock = /out\s+of\s+stock/i.test(html)
+      ? "Out of Stock"
+      : /in\s+stock|add\s*to\s*(?:basket|cart)|buy\s*now/i.test(html)
+        ? "In Stock"
+        : "Unknown";
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: null,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "ruxley_manor_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: []
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -626,6 +725,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (/gardenfurnitureworld\.co\.uk/i.test(host)) return false;
     if (/charlies\.co\.uk/i.test(host)) return false;
     if (/whitehallgardencentre\.co\.uk|whitehall/i.test(host)) return false;
+    if (/ruxleymanor\.co\.uk/i.test(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -694,6 +794,7 @@ const adapters: CompetitorAdapter[] = [
   new CharliesAdapter(),
   new WhitehallAdapter(),
   new GardenFurnitureWorldAdapter(),
+  new RuxleyManorAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
