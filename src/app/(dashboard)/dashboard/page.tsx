@@ -35,13 +35,19 @@ export default function DashboardPage() {
   const [runtime, setRuntime] = useState<{ scrapeDefaults?: { staleCheckHours?: number } }>({});
   const [configured, setConfigured] = useState<{ buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments: Record<string, string[]> }>({ buyers: [], departments: [], competitors: [], buyerDepartments: {} });
   const [autoAdjustMessage, setAutoAdjustMessage] = useState("");
+  const [alerts, setAlerts] = useState<Array<{ id: string; reason: string; competitor_name?: string; status: string; created_at: string; gap_amount_gbp?: number; product_id?: string }>>([]);
+  const [healthRows, setHealthRows] = useState<Array<{ competitorName: string; health: string; successRate: number; failureRate: number; suspiciousCount: number; lastSuccessfulRun: string | null }>>([]);
+  const [activity, setActivity] = useState<Array<{ id: string; summary: string; created_at: string }>>([]);
 
   useEffect(() => {
     Promise.all([
       fetch("/api/products", { cache: "no-store" }).then((res) => res.json()),
       fetch("/api/settings/runtime", { cache: "no-store" }).then((res) => res.json()),
-      fetch("/api/settings", { cache: "no-store" }).then((res) => res.json())
-    ]).then(([productsPayload, runtimePayload, settingsPayload]) => {
+      fetch("/api/settings", { cache: "no-store" }).then((res) => res.json()),
+      fetch("/api/alerts", { cache: "no-store" }).then((res) => res.json()),
+      fetch("/api/scraper-health", { cache: "no-store" }).then((res) => res.json()),
+      fetch("/api/activity", { cache: "no-store" }).then((res) => res.json())
+    ]).then(([productsPayload, runtimePayload, settingsPayload, alertsPayload, healthPayload, activityPayload]) => {
       const buyers = (settingsPayload.data?.buyers ?? []) as BuyerSetting[];
       setRows(productsPayload.data ?? []);
       setRuntime(runtimePayload.data ?? {});
@@ -51,6 +57,9 @@ export default function DashboardPage() {
         competitors: (settingsPayload.data?.competitors ?? []).filter((c: { isEnabled: boolean }) => c.isEnabled).map((c: { name: string }) => c.name),
         buyerDepartments: Object.fromEntries(buyers.map((buyer) => [buyer.name, buyer.departments ?? []]))
       });
+      setAlerts(alertsPayload.data ?? []);
+      setHealthRows(healthPayload.data ?? []);
+      setActivity(activityPayload.data ?? []);
     });
   }, []);
 
@@ -277,6 +286,52 @@ export default function DashboardPage() {
           </ul>
         </CardContent>
       </Card>
+
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Card>
+          <CardHeader><CardTitle>Recent alerts</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {alerts.slice(0, 8).map((alert) => (
+              <div key={alert.id} className="rounded border px-3 py-2">
+                <p className="font-medium">{alert.reason}</p>
+                <p className="text-xs text-slate-500">{alert.competitor_name ?? "All competitors"} · {new Date(alert.created_at).toLocaleString()}</p>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-xs">Status: {alert.status}</span>
+                  {alert.status === "new" ? <Button className="bg-slate-700 px-2 py-1 text-xs" onClick={async () => { await fetch(`/api/alerts/${alert.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "acknowledged" }) }); setAlerts((prev) => prev.map((item) => item.id === alert.id ? { ...item, status: "acknowledged" } : item)); }}>Acknowledge</Button> : null}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Scraper health</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {healthRows.slice(0, 8).map((row) => (
+              <div key={row.competitorName} className="rounded border px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium">{row.competitorName}</p>
+                  <span className={`rounded-full px-2 py-0.5 text-xs ${row.health === "Healthy" ? "bg-emerald-100 text-emerald-800" : row.health === "Watch" ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-700"}`}>{row.health}</span>
+                </div>
+                <p className="text-xs text-slate-500">Success {row.successRate}% · Fail {row.failureRate}% · Suspicious {row.suspiciousCount}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Recent activity</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {activity.slice(0, 8).map((item) => (
+              <div key={item.id} className="rounded border px-3 py-2">
+                <p>{item.summary}</p>
+                <p className="text-xs text-slate-500">{new Date(item.created_at).toLocaleString()}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

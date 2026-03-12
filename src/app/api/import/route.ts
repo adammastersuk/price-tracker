@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSettingsConfig, insertPriceHistory, upsertCompetitorPrice, upsertProductBySku } from "@/lib/db";
 import { canonicalizeDomain, looksLikeValidUrl, withAliases } from "@/lib/matching";
+import { logActivity } from "@/lib/operations";
 
 interface ParsedRow {
   rowNumber: number;
@@ -210,6 +211,8 @@ export async function POST(request: NextRequest) {
         console.error("CSV import row failed", error);
       }
     }
+
+    await logActivity({ event_type: "csv_import", entity_type: "import", summary: `CSV import completed (${imported} imported, ${failed} failed, ${parsed.skipped} skipped).`, metadata: { imported, failed, skipped: parsed.skipped } });
 
     return NextResponse.json({
       imported,

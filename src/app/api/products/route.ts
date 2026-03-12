@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createProduct, deleteProduct, findProductBySku, getProductById, getProducts, mergeProducts, updateProduct } from "@/lib/db";
 import { normalizeBuyerDepartmentAndCompetitor } from "@/lib/settings-normalizers";
+import { logActivity } from "@/lib/operations";
 
 function isDuplicateKeyError(errorMessage: string): boolean {
   return errorMessage.includes("duplicate key") || errorMessage.includes("23505");
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
     const created = await createProduct(payload);
+    await logActivity({ event_type: "product_created", entity_type: "product", entity_id: created[0]?.id, summary: `Product created: ${created[0]?.sku ?? ""}` });
     return NextResponse.json({ data: created[0] }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
@@ -76,6 +78,7 @@ export async function PUT(request: NextRequest) {
       : Number((((bents - cost) / bents) * 100).toFixed(2));
 
     const updated = await updateProduct(payload.id, { ...updates, buyer: normalized.buyer, department: normalized.department, sku: requestedSku, margin_percent: marginPercent });
+    await logActivity({ event_type: "product_updated", entity_type: "product", entity_id: payload.id, summary: `Product updated: ${requestedSku}` });
     return NextResponse.json({ data: updated[0] });
   } catch (error) {
     const message = (error as Error).message;
@@ -111,6 +114,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const summary = await mergeProducts(sourceProductId, targetProductId);
+    await logActivity({ event_type: "product_merged", entity_type: "product", entity_id: sourceProductId, summary: `Merged product ${sourceProductId} into ${targetProductId}.`, metadata: summary as unknown as Record<string, unknown> });
     return NextResponse.json({ data: summary });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
@@ -130,6 +134,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     await deleteProduct(productId);
+    await logActivity({ event_type: "product_deleted", entity_type: "product", entity_id: productId, summary: `Product deleted: ${existing.internalSku}` });
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "Unable to delete product. Please try again." }, { status: 500 });

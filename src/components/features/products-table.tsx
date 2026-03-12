@@ -29,6 +29,28 @@ const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
 const stockOptions: CompetitorStockStatus[] = ["In Stock", "Low Stock", "Out of Stock", "Unknown"];
 const workflowOptions = ["Open", "Monitoring", "Reviewed", "No Action", "Closed"] as const;
 
+interface SavedViewState {
+  search: string;
+  buyers: string[];
+  departments: string[];
+  suppliers: string[];
+  competitors: string[];
+  statuses: string[];
+  sortKey: string;
+  sortDirection: "asc" | "desc";
+}
+
+interface SavedView { id: string; name: string; state: SavedViewState; }
+
+const starterViews: Array<{ name: string; state: SavedViewState }> = [
+  { name: "Needs review", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Needs review"], sortKey: "status", sortDirection: "desc" } },
+  { name: "Bents not cheapest", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Higher than competitor"], sortKey: "diff", sortDirection: "desc" } },
+  { name: "Promo discrepancies", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Promo discrepancy"], sortKey: "status", sortDirection: "desc" } },
+  { name: "Suspicious extractions", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Needs review"], sortKey: "status", sortDirection: "desc" } },
+  { name: "Stale checks", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: [], sortKey: "status", sortDirection: "desc" } }
+];
+
+
 const statusText = (status: CompetitorListing["lastCheckStatus"]) => {
   if (status === "success") return "Success";
   if (status === "suspicious") return "Suspicious";
@@ -118,7 +140,40 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   const [sortKey, setSortKey] = useState<SortKey>("sku");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [editingCompetitorId, setEditingCompetitorId] = useState<string | null>(null);
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [savedViewName, setSavedViewName] = useState("");
+  const [activeSavedViewId, setActiveSavedViewId] = useState<string>("");
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
+
+  const currentViewState = (): SavedViewState => ({
+    search: filters.search,
+    buyers: filters.buyers,
+    departments: filters.departments,
+    suppliers: filters.suppliers,
+    competitors: filters.competitors,
+    statuses: filters.statuses,
+    sortKey,
+    sortDirection
+  });
+
+  const applyViewState = (state: SavedViewState) => {
+    setFilters((prev) => ({ ...prev, ...state }));
+    setSortKey(state.sortKey as SortKey);
+    setSortDirection(state.sortDirection);
+  };
+
+  const loadSavedViews = async () => {
+    const res = await fetch('/api/saved-views', { cache: 'no-store' });
+    const payload = await res.json();
+    const stored = (payload.data ?? []) as SavedView[];
+    const merged = [...starterViews.filter((starter) => !stored.some((v) => v.name === starter.name)).map((v, idx) => ({ id: `starter-${idx}`, name: v.name, state: v.state })), ...stored];
+    setSavedViews(merged);
+  };
+
+  useEffect(() => {
+    loadSavedViews();
+  }, []);
+
   const sortedRows = useMemo(() => {
     const direction = sortDirection === "asc" ? 1 : -1;
     const nullRank = (value: number | null | undefined) => (value === null || value === undefined ? Number.POSITIVE_INFINITY : value);
@@ -450,6 +505,39 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   return (
     <div className="space-y-4">
       <Card><CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
+        <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded border bg-slate-50 px-2 py-2">
+          <Select value={activeSavedViewId} onChange={(e) => {
+            const id = e.target.value;
+            setActiveSavedViewId(id);
+            const view = savedViews.find((v) => v.id === id);
+            if (view) applyViewState(view.state);
+          }}>
+            <option value="">Saved views</option>
+            {savedViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
+          </Select>
+          <Input placeholder="View name" value={savedViewName} onChange={(e) => setSavedViewName(e.target.value)} className="max-w-[180px]" />
+          <Button className="bg-slate-700 px-2 py-1 text-xs" onClick={async () => {
+            if (!savedViewName.trim()) return;
+            const res = await fetch('/api/saved-views', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: savedViewName.trim(), state: currentViewState() }) });
+            if (res.ok) { setSavedViewName(''); await loadSavedViews(); }
+          }}>Save</Button>
+          <Button className="bg-slate-700 px-2 py-1 text-xs" disabled={!activeSavedViewId || activeSavedViewId.startsWith('starter-')} onClick={async () => {
+            await fetch(`/api/saved-views/${activeSavedViewId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: currentViewState() }) });
+            await loadSavedViews();
+          }}>Overwrite</Button>
+          <Button className="bg-slate-700 px-2 py-1 text-xs" disabled={!activeSavedViewId || activeSavedViewId.startsWith('starter-')} onClick={async () => {
+            if (!savedViewName.trim()) return;
+            await fetch(`/api/saved-views/${activeSavedViewId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: savedViewName.trim() }) });
+            setSavedViewName('');
+            await loadSavedViews();
+          }}>Rename</Button>
+          <Button className="bg-rose-700 px-2 py-1 text-xs" disabled={!activeSavedViewId || activeSavedViewId.startsWith('starter-')} onClick={async () => {
+            if (!window.confirm('Delete this saved view?')) return;
+            await fetch(`/api/saved-views/${activeSavedViewId}`, { method: 'DELETE' });
+            setActiveSavedViewId('');
+            await loadSavedViews();
+          }}>Delete</Button>
+        </div>
         <Input placeholder="Search SKU or product" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} className="lg:col-span-1" />
         <MultiSelectFilter label="Buyers" allLabel="All buyers" options={values.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} />
         <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} />

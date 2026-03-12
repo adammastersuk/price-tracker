@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteCompetitorPrice, getCompetitorPrices, insertCompetitorPrice, insertPriceHistory, updateCompetitorPrice } from "@/lib/db";
 import { normalizeBuyerDepartmentAndCompetitor } from "@/lib/settings-normalizers";
+import { logActivity } from "@/lib/operations";
 
 export async function GET(request: NextRequest) {
   const productId = request.nextUrl.searchParams.get("productId");
@@ -31,6 +32,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    await logActivity({ event_type: "competitor_listing_created", entity_type: "competitor_listing", entity_id: inserted[0]?.id, summary: `Competitor listing created: ${normalized.competitorName ?? payload?.competitor_name}` });
     return NextResponse.json({ data: inserted[0] }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
@@ -55,6 +57,7 @@ export async function PUT(request: NextRequest) {
       });
     }
 
+    await logActivity({ event_type: "competitor_listing_updated", entity_type: "competitor_listing", entity_id: payload.id, summary: "Competitor listing updated." });
     return NextResponse.json({ data: updated[0] });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
@@ -69,6 +72,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     await deleteCompetitorPrice(listingId);
+    await logActivity({ event_type: "competitor_listing_deleted", entity_type: "competitor_listing", entity_id: listingId, summary: "Competitor listing deleted." });
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "Unable to delete competitor listing. Please try again." }, { status: 500 });
