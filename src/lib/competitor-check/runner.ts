@@ -5,7 +5,8 @@ import {
   insertCompetitorPrice,
   insertPriceHistory,
   updateCompetitorPrice,
-  type CompetitorPriceInput
+  type CompetitorPriceInput,
+  getRuntimeSettings
 } from "@/lib/db";
 import { selectAdapter } from "@/lib/competitor-check/adapters";
 
@@ -50,33 +51,36 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-function getBatchSize(explicit?: number): number {
+function getBatchSize(runtimeBatchSize: number | undefined, explicit?: number): number {
   if (explicit) return explicit;
+  if (runtimeBatchSize && runtimeBatchSize > 0) return runtimeBatchSize;
   const env = Number.parseInt(process.env.CHECK_BATCH_SIZE ?? "", 10);
   return Number.isFinite(env) && env > 0 ? env : 10;
 }
 
-function isSuspicious(previousPrice: number | null, nextPrice: number | null): boolean {
+function isSuspicious(previousPrice: number | null, nextPrice: number | null, highThresholdPercent: number): boolean {
   if (previousPrice === null || nextPrice === null || previousPrice === 0) return false;
-  return Math.abs(((nextPrice - previousPrice) / previousPrice) * 100) >= 40;
+  return Math.abs(((nextPrice - previousPrice) / previousPrice) * 100) >= highThresholdPercent;
 }
 
 function lowConfidence(result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
   return result.match_confidence === "Low" || result.match_confidence === "Needs review";
 }
 
-function isImplausibleAgainstBents(bentsPrice: number, competitorPrice: number | null): boolean {
+function isImplausibleAgainstBents(bentsPrice: number, competitorPrice: number | null, lowThresholdPercent: number, highThresholdPercent: number): boolean {
   if (competitorPrice === null || bentsPrice <= 0) return false;
-  return competitorPrice < bentsPrice * 0.1 || competitorPrice > bentsPrice * 4;
+  const lowFactor = Math.max(0, 1 - lowThresholdPercent / 100);
+  const highFactor = 1 + highThresholdPercent / 100;
+  return competitorPrice < bentsPrice * lowFactor || competitorPrice > bentsPrice * highFactor;
 }
 
-function suspiciousReason(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
+function suspiciousReason(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>, thresholds: { low: number; high: number; }) {
   const reasons: string[] = [];
   const nextPrice = result.competitor_current_price;
-  if (isSuspicious(target.previousPrice, nextPrice)) {
+  if (isSuspicious(target.previousPrice, nextPrice, thresholds.high)) {
     reasons.push("Large delta vs previous checked competitor price.");
   }
-  if (isImplausibleAgainstBents(target.bentsPrice, nextPrice)) {
+  if (isImplausibleAgainstBents(target.bentsPrice, nextPrice, thresholds.low, thresholds.high)) {
     reasons.push("Extracted value is implausible against Bents product price context.");
   }
   if (nextPrice !== null && target.bentsPrice > 500 && nextPrice < target.bentsPrice * 0.25) {
@@ -134,8 +138,11 @@ async function buildTargets(productIds?: string[], competitorListingIds?: string
   return targets;
 }
 
-async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
-  const reasons = suspiciousReason(target, result);
+async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>) {
+  const reasons = suspiciousReason(target, result, {
+    low: runtime.toleranceSettings.suspiciousLowPriceThresholdPercent,
+    high: runtime.toleranceSettings.suspiciousHighPriceThresholdPercent
+  });
   const suspicious = reasons.length > 0;
 
   const acceptedCurrentPrice = suspicious ? target.previousValidPrice : result.competitor_current_price;
@@ -151,7 +158,7 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
     competitorPromoPrice: result.competitor_promo_price,
     competitorStockStatus: result.competitor_stock_status as "In Stock" | "Low Stock" | "Out of Stock" | "Unknown",
     priceDifferencePercent: diffPct
-  });
+  }, runtime.toleranceSettings.inLinePricingTolerancePercent);
 
   const payload: CompetitorPriceInput = {
     product_id: target.productId,
@@ -219,7 +226,9 @@ export async function runCompetitorRefresh(options: RefreshOptions = {}): Promis
   let succeeded = 0;
   let suspicious = 0;
 
-  for (const batch of chunk(targets, getBatchSize(options.batchSize))) {
+  const runtime = await getRuntimeSettings();
+
+  for (const batch of chunk(targets, getBatchSize(runtime.scrapeDefaults.batchSize, options.batchSize))) {
     await Promise.all(batch.map(async (target) => {
       processed += 1;
 
@@ -238,7 +247,7 @@ export async function runCompetitorRefresh(options: RefreshOptions = {}): Promis
           productName: target.productName,
           brand: target.brand
         });
-        const saveResult = await saveSuccess(target, result);
+        const saveResult = await saveSuccess(target, result, runtime);
         succeeded += 1;
         if (saveResult.suspicious) suspicious += 1;
       } catch (error) {

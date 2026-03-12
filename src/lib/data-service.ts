@@ -20,8 +20,16 @@ export const defaultFilters: ProductFilters = {
   status: "all"
 };
 
-const STALE_HOURS = Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24;
-const STALE_MS = STALE_HOURS * 3600_000;
+const DEFAULT_STALE_HOURS = Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24;
+
+export interface RuntimeSettingsInput {
+  scrapeDefaults?: { staleCheckHours?: number };
+}
+
+function staleHours(runtime?: RuntimeSettingsInput) {
+  return Number(runtime?.scrapeDefaults?.staleCheckHours ?? DEFAULT_STALE_HOURS) || DEFAULT_STALE_HOURS;
+}
+
 
 export interface TrustedCompetitor {
   competitorName: string;
@@ -99,10 +107,11 @@ function lowestTrustedCompetitor(row: TrackedProductRow): TrustedCompetitor | nu
   };
 }
 
-export function rowCommercialSignals(row: TrackedProductRow): CommercialSignals {
+export function rowCommercialSignals(row: TrackedProductRow, runtime?: RuntimeSettingsInput): CommercialSignals {
   const now = Date.now();
   const checkedTs = new Date(row.lastCheckedAt).getTime();
-  const stale = Number.isFinite(checkedTs) ? now - checkedTs > STALE_MS : true;
+  const staleMs = staleHours(runtime) * 3600_000;
+  const stale = Number.isFinite(checkedTs) ? now - checkedTs > staleMs : true;
   const missingMapping = row.competitorListings.length === 0
     || row.competitorListings.every((listing) => !listing.competitorProductUrl);
   const failedCheck = row.lastCheckStatus === "failed" || row.competitorListings.some((listing) => listing.lastCheckStatus === "failed");
@@ -135,11 +144,11 @@ export function rowCommercialSignals(row: TrackedProductRow): CommercialSignals 
   };
 }
 
-export function exceptionReason(row: TrackedProductRow): string {
-  const s = rowCommercialSignals(row);
+export function exceptionReason(row: TrackedProductRow, runtime?: RuntimeSettingsInput): string {
+  const s = rowCommercialSignals(row, runtime);
   if (s.missingMapping) return "Missing competitor mapping";
   if (s.failedCheck) return "Failed check";
-  if (s.stale) return `Stale check (${STALE_HOURS}h+)`;
+  if (s.stale) return `Stale check (${staleHours(runtime)}h+)`;
   if (s.suspicious) return "Suspicious extraction";
   if (s.promoDiscrepancy) return "Promo discrepancy";
   if (s.missingValidCompetitorPrice) return "Missing valid competitor price";
@@ -158,8 +167,8 @@ const workflowWeight: Record<WorkflowStatus, number> = {
   Resolved: -30
 };
 
-export function priorityScore(row: TrackedProductRow): number {
-  const s = rowCommercialSignals(row);
+export function priorityScore(row: TrackedProductRow, runtime?: RuntimeSettingsInput): number {
+  const s = rowCommercialSignals(row, runtime);
   let score = 0;
   if (s.missingMapping) score += 90;
   if (s.failedCheck) score += 80;
@@ -172,8 +181,8 @@ export function priorityScore(row: TrackedProductRow): number {
   return Number(score.toFixed(2));
 }
 
-function topReason(row: TrackedProductRow): string {
-  const s = rowCommercialSignals(row);
+function topReason(row: TrackedProductRow, runtime?: RuntimeSettingsInput): string {
+  const s = rowCommercialSignals(row, runtime);
   if (s.missingMapping) return "Missing competitor mapping";
   if (s.failedCheck) return "Failed check";
   if (s.suspicious) return "Suspicious extraction";
@@ -182,18 +191,18 @@ function topReason(row: TrackedProductRow): string {
     return `Bents +£${s.gapGbp.toFixed(2)} (${s.gapPercent.toFixed(1)}%) vs ${s.lowestTrusted.competitorName}`;
   }
   if (s.missingValidCompetitorPrice) return "Missing valid competitor price";
-  if (s.stale) return `Stale check (${STALE_HOURS}h+)`;
+  if (s.stale) return `Stale check (${staleHours(runtime)}h+)`;
   return "Needs commercial review";
 }
 
-export function prioritisedReviewQueue(rows: TrackedProductRow[]): QueueItem[] {
+export function prioritisedReviewQueue(rows: TrackedProductRow[], runtime?: RuntimeSettingsInput): QueueItem[] {
   return rows
     .map((row) => {
-      const signals = rowCommercialSignals(row);
+      const signals = rowCommercialSignals(row, runtime);
       return {
         row,
-        reason: topReason(row),
-        score: priorityScore(row),
+        reason: topReason(row, runtime),
+        score: priorityScore(row, runtime),
         gapGbp: signals.gapGbp,
         gapPercent: signals.gapPercent,
         lowestTrusted: signals.lowestTrusted
@@ -203,12 +212,12 @@ export function prioritisedReviewQueue(rows: TrackedProductRow[]): QueueItem[] {
     .sort((a, b) => b.score - a.score || b.gapGbp - a.gapGbp || b.gapPercent - a.gapPercent);
 }
 
-export function exceptionQueue(rows: TrackedProductRow[]) {
-  return rows.filter((r) => exceptionReason(r) !== "Review required");
+export function exceptionQueue(rows: TrackedProductRow[], runtime?: RuntimeSettingsInput) {
+  return rows.filter((r) => exceptionReason(r, runtime) !== "Review required");
 }
 
-export function dashboardStats(rows: TrackedProductRow[]) {
-  const signals = rows.map((row) => rowCommercialSignals(row));
+export function dashboardStats(rows: TrackedProductRow[], runtime?: RuntimeSettingsInput) {
+  const signals = rows.map((row) => rowCommercialSignals(row, runtime));
   return {
     total: rows.length,
     checkedToday: signals.filter((s) => s.checkedToday).length,
@@ -222,7 +231,7 @@ export function dashboardStats(rows: TrackedProductRow[]) {
   };
 }
 
-export function exceptionBreakdown(rows: TrackedProductRow[]) {
+export function exceptionBreakdown(rows: TrackedProductRow[], runtime?: RuntimeSettingsInput) {
   const init = {
     bentsHigher: 0,
     promoDiscrepancy: 0,
@@ -234,7 +243,7 @@ export function exceptionBreakdown(rows: TrackedProductRow[]) {
   };
 
   return rows.reduce((acc, row) => {
-    const s = rowCommercialSignals(row);
+    const s = rowCommercialSignals(row, runtime);
     if (s.bentsNotCheapest) acc.bentsHigher += 1;
     if (s.promoDiscrepancy) acc.promoDiscrepancy += 1;
     if (s.suspicious) acc.suspicious += 1;
@@ -246,14 +255,14 @@ export function exceptionBreakdown(rows: TrackedProductRow[]) {
   }, init);
 }
 
-export function largestPriceGaps(rows: TrackedProductRow[], sortBy: "gbp" | "percent" = "gbp"): QueueItem[] {
-  return prioritisedReviewQueue(rows)
+export function largestPriceGaps(rows: TrackedProductRow[], sortBy: "gbp" | "percent" = "gbp", runtime?: RuntimeSettingsInput): QueueItem[] {
+  return prioritisedReviewQueue(rows, runtime)
     .filter((entry) => entry.lowestTrusted && entry.gapGbp > 0)
     .sort((a, b) => sortBy === "gbp"
       ? b.gapGbp - a.gapGbp || b.gapPercent - a.gapPercent
       : b.gapPercent - a.gapPercent || b.gapGbp - a.gapGbp);
 }
 
-export function staleThresholdHours() {
-  return STALE_HOURS;
+export function staleThresholdHours(runtime?: RuntimeSettingsInput) {
+  return staleHours(runtime);
 }

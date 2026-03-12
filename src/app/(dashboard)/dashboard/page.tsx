@@ -25,19 +25,33 @@ export default function DashboardPage() {
   const [filters, setFilters] = useState(defaultFilters);
   const [gapSort, setGapSort] = useState<GapSort>("gbp");
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<{ scrapeDefaults?: { staleCheckHours?: number } }>({});
+  const [configured, setConfigured] = useState<{ buyers: string[]; departments: string[] }>({ buyers: [], departments: [] });
 
   useEffect(() => {
-    fetch("/api/products", { cache: "no-store" })
-      .then((res) => res.json())
-      .then((payload) => setRows(payload.data ?? []));
+    Promise.all([
+      fetch("/api/products", { cache: "no-store" }).then((res) => res.json()),
+      fetch("/api/settings/runtime", { cache: "no-store" }).then((res) => res.json()),
+      fetch("/api/settings", { cache: "no-store" }).then((res) => res.json())
+    ]).then(([productsPayload, runtimePayload, settingsPayload]) => {
+      setRows(productsPayload.data ?? []);
+      setRuntime(runtimePayload.data ?? {});
+      setConfigured({
+        buyers: (settingsPayload.data?.buyers ?? []).filter((b: { isActive: boolean }) => b.isActive).map((b: { name: string }) => b.name),
+        departments: (settingsPayload.data?.departments ?? []).map((d: { name: string }) => d.name)
+      });
+    });
   }, []);
 
-  const choices = useMemo(() => uniqueValues(rows), [rows]);
+  const choices = useMemo(() => {
+    const derived = uniqueValues(rows);
+    return { ...derived, buyers: configured.buyers.length ? configured.buyers : derived.buyers, departments: configured.departments.length ? configured.departments : derived.departments };
+  }, [rows, configured]);
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
-  const stats = useMemo(() => dashboardStats(filteredRows), [filteredRows]);
-  const queue = useMemo(() => prioritisedReviewQueue(filteredRows).slice(0, 12), [filteredRows]);
-  const gapRows = useMemo(() => largestPriceGaps(filteredRows, gapSort).slice(0, 10), [filteredRows, gapSort]);
-  const exceptions = useMemo(() => exceptionBreakdown(filteredRows), [filteredRows]);
+  const stats = useMemo(() => dashboardStats(filteredRows, runtime), [filteredRows, runtime]);
+  const queue = useMemo(() => prioritisedReviewQueue(filteredRows, runtime).slice(0, 12), [filteredRows, runtime]);
+  const gapRows = useMemo(() => largestPriceGaps(filteredRows, gapSort, runtime).slice(0, 10), [filteredRows, gapSort, runtime]);
+  const exceptions = useMemo(() => exceptionBreakdown(filteredRows, runtime), [filteredRows, runtime]);
 
   const metrics = [
     { label: "Products tracked", value: stats.total },
@@ -70,7 +84,7 @@ export default function DashboardPage() {
     { label: "Failed check", count: exceptions.failed, query: "Needs review" },
     { label: "Missing competitor mapping", count: exceptions.missingMapping, query: "Missing competitor data" },
     { label: "Missing valid competitor price", count: exceptions.missingValidCompetitorPrice, query: "Missing competitor data" },
-    { label: `Stale checks (${staleThresholdHours()}h+)`, count: exceptions.stale, query: "Needs review" }
+    { label: `Stale checks (${staleThresholdHours(runtime)}h+)`, count: exceptions.stale, query: "Needs review" }
   ];
 
   return (

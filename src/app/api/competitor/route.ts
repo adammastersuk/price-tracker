@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteCompetitorPrice, getCompetitorPrices, insertCompetitorPrice, insertPriceHistory, updateCompetitorPrice } from "@/lib/db";
+import { normalizeBuyerDepartmentAndCompetitor } from "@/lib/settings-normalizers";
 
 export async function GET(request: NextRequest) {
   const productId = request.nextUrl.searchParams.get("productId");
@@ -18,7 +19,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
-    const inserted = await insertCompetitorPrice(payload);
+    const normalized = await normalizeBuyerDepartmentAndCompetitor({ competitorName: payload?.competitor_name });
+    const inserted = await insertCompetitorPrice({ ...payload, competitor_name: normalized.competitorName ?? payload?.competitor_name });
 
     if (payload.product_id && payload.competitor_name) {
       await insertPriceHistory({
@@ -41,7 +43,8 @@ export async function PUT(request: NextRequest) {
     if (!payload?.id) {
       return NextResponse.json({ error: "id is required" }, { status: 400 });
     }
-    const updated = await updateCompetitorPrice(payload.id, payload.updates ?? {});
+    const normalized = await normalizeBuyerDepartmentAndCompetitor({ competitorName: payload?.updates?.competitor_name });
+    const updated = await updateCompetitorPrice(payload.id, { ...(payload.updates ?? {}), competitor_name: normalized.competitorName ?? payload?.updates?.competitor_name });
 
     if (payload.recordHistory && payload.updates?.product_id && payload.updates?.competitor_name) {
       await insertPriceHistory({

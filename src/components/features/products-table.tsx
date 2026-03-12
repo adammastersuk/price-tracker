@@ -92,7 +92,9 @@ const formatDiff = (listing: CompetitorListing) => {
   return { line1, line2, tone: direction === "cheaper" ? "text-emerald-700" : "text-rose-700" };
 };
 
-export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; }) {
+interface ConfiguredOptions { buyers: string[]; departments: string[]; competitors: string[]; }
+
+export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredOptions }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; configuredOptions?: ConfiguredOptions; }) {
   const [filters, setFilters] = useState({ ...defaultFilters, ...initialFilters });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -136,7 +138,15 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
       }
     });
   }, [filteredRows, sortDirection, sortKey]);
-  const values = useMemo(() => uniqueValues(rows), [rows]);
+  const values = useMemo(() => {
+    const derived = uniqueValues(rows);
+    return {
+      ...derived,
+      buyers: configuredOptions?.buyers?.length ? configuredOptions.buyers : derived.buyers,
+      departments: configuredOptions?.departments?.length ? configuredOptions.departments : derived.departments,
+      competitors: configuredOptions?.competitors?.length ? configuredOptions.competitors : derived.competitors
+    };
+  }, [rows, configuredOptions]);
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
   const selectedRows = useMemo(() => rows.filter((row) => selectedIds.includes(row.id)), [rows, selectedIds]);
   const visibleSelectedCount = useMemo(() => filteredRows.filter((row) => selectedIds.includes(row.id)).length, [filteredRows, selectedIds]);
@@ -444,11 +454,14 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
       {selected && productForm && <Card><CardContent className="grid gap-5 lg:grid-cols-3"><div className="lg:col-span-2 space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-slate-600">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
 
             {editMode ? <div className="grid gap-2 md:grid-cols-2">{[
-              ["SKU", "sku"], ["Product name", "name"], ["Brand", "brand"], ["Buyer", "buyer"], ["Supplier", "supplier"], ["Department", "department"], ["Bents URL", "product_url"], ["Cost price", "cost_price"]
+              ["SKU", "sku"], ["Product name", "name"], ["Brand", "brand"], ["Supplier", "supplier"], ["Bents URL", "product_url"], ["Cost price", "cost_price"]
             ].map(([label, key]) => {
               const formKey = key as ProductFormTextKey;
               return <label key={key} className="text-xs text-slate-600">{label}<Input value={productForm[formKey] ?? ""} onChange={(e) => setProductForm((prev) => prev ? { ...prev, [formKey]: e.target.value } : prev)} /></label>;
-            })}<label className="text-xs text-slate-600">Bents price<Input type="number" step="0.01" value={productForm.bents_price} onChange={(e) => setProductForm((prev) => prev ? { ...prev, bents_price: Number(e.target.value) } : prev)} /></label></div> : <>
+            })}
+              <label className="text-xs text-slate-600">Buyer<Select value={productForm.buyer} onChange={(e) => setProductForm((prev) => prev ? { ...prev, buyer: e.target.value } : prev)}><option value="">Unassigned</option>{values.buyers.map((buyer) => <option key={buyer} value={buyer}>{buyer}</option>)}</Select></label>
+              <label className="text-xs text-slate-600">Department<Select value={productForm.department} onChange={(e) => setProductForm((prev) => prev ? { ...prev, department: e.target.value } : prev)}><option value="">Unassigned</option>{values.departments.map((department) => <option key={department} value={department}>{department}</option>)}</Select></label>
+              <label className="text-xs text-slate-600">Bents price<Input type="number" step="0.01" value={productForm.bents_price} onChange={(e) => setProductForm((prev) => prev ? { ...prev, bents_price: Number(e.target.value) } : prev)} /></label></div> : <>
               <p><b>Margin:</b> {marginLabel(selected)} | <b>Latest check:</b> {new Date(selected.lastCheckedAt).toLocaleString()}</p>
             </>}
 
@@ -479,7 +492,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters }: { rows: T
                     </div>
 
                     {isEditing && <div className="grid gap-2 md:grid-cols-2">
-                      <label className="text-xs">Competitor name<Input value={c.competitorName} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorName: e.target.value } : x))} /></label>
+                      <label className="text-xs">Competitor name<Select value={c.competitorName} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorName: e.target.value } : x))}><option value={c.competitorName}>{c.competitorName}</option>{values.competitors.filter((name) => name !== c.competitorName).map((name) => <option key={name} value={name}>{name}</option>)}</Select></label>
                       <label className="text-xs">Competitor URL<Input value={c.competitorProductUrl} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorProductUrl: e.target.value } : x))} /></label>
                       <label className="text-xs">Current price<Input type="number" step="0.01" value={c.competitorCurrentPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorCurrentPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
                       <label className="text-xs">Promo price<Input type="number" step="0.01" value={c.competitorPromoPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorPromoPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>

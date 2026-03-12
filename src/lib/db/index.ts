@@ -44,6 +44,56 @@ interface CompetitorPriceRecord {
 interface ProductNoteRecord { id: string; note: string; owner: string | null; workflow_status: string | null; created_at: string; }
 interface PriceHistoryRecord { id: string; competitor_name: string; price: number | null; checked_at: string; }
 
+interface BuyerRecord { id: string; name: string; is_active: boolean; created_at: string; updated_at: string; }
+interface DepartmentRecord { id: string; name: string; created_at: string; updated_at: string; }
+interface BuyerDepartmentRecord { id: string; buyer_id: string; department_id: string; created_at: string; }
+interface CompetitorRecord {
+  id: string;
+  name: string;
+  base_url: string;
+  domain: string;
+  adapter_key: string;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+interface AppSettingRecord { key: string; value: Record<string, unknown>; updated_at: string; }
+
+export interface BuyerConfig {
+  id: string;
+  name: string;
+  isActive: boolean;
+  departments: string[];
+}
+
+export interface DepartmentConfig {
+  id: string;
+  name: string;
+  buyers: string[];
+}
+
+export interface CompetitorConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  domain: string;
+  adapterKey: string;
+  isEnabled: boolean;
+}
+
+export interface RuntimeSettings {
+  scrapeDefaults: {
+    staleCheckHours: number;
+    batchSize: number;
+    defaultRefreshFrequencyHours: number;
+  };
+  toleranceSettings: {
+    inLinePricingTolerancePercent: number;
+    suspiciousLowPriceThresholdPercent: number;
+    suspiciousHighPriceThresholdPercent: number;
+  };
+}
+
 
 interface MergeProductsSummary {
   sourceProductId: string;
@@ -87,6 +137,19 @@ export interface CompetitorPriceInput {
   suspicious_change_flag?: boolean;
   extraction_metadata?: Record<string, unknown>;
 }
+
+const defaultRuntimeSettings: RuntimeSettings = {
+  scrapeDefaults: {
+    staleCheckHours: Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24,
+    batchSize: 50,
+    defaultRefreshFrequencyHours: 24
+  },
+  toleranceSettings: {
+    inLinePricingTolerancePercent: Number.parseFloat(process.env.DEFAULT_PRICE_TOLERANCE ?? "3") || 3,
+    suspiciousLowPriceThresholdPercent: 35,
+    suspiciousHighPriceThresholdPercent: 80
+  }
+};
 
 const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
 
@@ -387,4 +450,148 @@ export async function mergeProducts(sourceProductId: string, targetProductId: st
     movedHistoryCount: historyToMove.length,
     sourceDeleted
   };
+}
+
+export async function getRuntimeSettings(): Promise<RuntimeSettings> {
+  const rows = await supabaseRequest<AppSettingRecord[]>({ table: "app_settings", query: new URLSearchParams({ select: "*" }) });
+  const map = new Map(rows.map((row) => [row.key, row.value]));
+  const scrape = map.get("scrape_defaults") as RuntimeSettings["scrapeDefaults"] | undefined;
+  const tolerance = map.get("tolerance_settings") as RuntimeSettings["toleranceSettings"] | undefined;
+
+  return {
+    scrapeDefaults: {
+      staleCheckHours: Number(scrape?.staleCheckHours ?? defaultRuntimeSettings.scrapeDefaults.staleCheckHours),
+      batchSize: Number(scrape?.batchSize ?? defaultRuntimeSettings.scrapeDefaults.batchSize),
+      defaultRefreshFrequencyHours: Number(scrape?.defaultRefreshFrequencyHours ?? defaultRuntimeSettings.scrapeDefaults.defaultRefreshFrequencyHours)
+    },
+    toleranceSettings: {
+      inLinePricingTolerancePercent: Number(tolerance?.inLinePricingTolerancePercent ?? defaultRuntimeSettings.toleranceSettings.inLinePricingTolerancePercent),
+      suspiciousLowPriceThresholdPercent: Number(tolerance?.suspiciousLowPriceThresholdPercent ?? defaultRuntimeSettings.toleranceSettings.suspiciousLowPriceThresholdPercent),
+      suspiciousHighPriceThresholdPercent: Number(tolerance?.suspiciousHighPriceThresholdPercent ?? defaultRuntimeSettings.toleranceSettings.suspiciousHighPriceThresholdPercent)
+    }
+  };
+}
+
+export async function updateAppSetting(key: string, value: Record<string, unknown>) {
+  return supabaseRequest<AppSettingRecord[]>({
+    table: "app_settings",
+    method: "POST",
+    query: new URLSearchParams({ on_conflict: "key" }),
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: { key, value }
+  });
+}
+
+export async function getSettingsConfig() {
+  const [buyers, departments, mappings, competitors, runtimeSettings] = await Promise.all([
+    supabaseRequest<BuyerRecord[]>({ table: "buyers", query: new URLSearchParams({ select: "*", order: "name.asc" }) }),
+    supabaseRequest<DepartmentRecord[]>({ table: "departments", query: new URLSearchParams({ select: "*", order: "name.asc" }) }),
+    supabaseRequest<BuyerDepartmentRecord[]>({ table: "buyer_departments", query: new URLSearchParams({ select: "*" }) }),
+    supabaseRequest<CompetitorRecord[]>({ table: "competitors", query: new URLSearchParams({ select: "*", order: "name.asc" }) }),
+    getRuntimeSettings()
+  ]);
+
+  const departmentsById = new Map(departments.map((d) => [d.id, d.name]));
+  const buyersById = new Map(buyers.map((b) => [b.id, b.name]));
+  const deptsByBuyer = mappings.reduce<Record<string, string[]>>((acc, mapping) => {
+    acc[mapping.buyer_id] = acc[mapping.buyer_id] ?? [];
+    const deptName = departmentsById.get(mapping.department_id);
+    if (deptName) acc[mapping.buyer_id].push(deptName);
+    return acc;
+  }, {});
+  const buyersByDept = mappings.reduce<Record<string, string[]>>((acc, mapping) => {
+    acc[mapping.department_id] = acc[mapping.department_id] ?? [];
+    const buyerName = buyersById.get(mapping.buyer_id);
+    if (buyerName) acc[mapping.department_id].push(buyerName);
+    return acc;
+  }, {});
+
+  return {
+    buyers: buyers.map((buyer) => ({
+      id: buyer.id,
+      name: buyer.name,
+      isActive: buyer.is_active,
+      departments: (deptsByBuyer[buyer.id] ?? []).sort((a, b) => a.localeCompare(b))
+    } as BuyerConfig)),
+    departments: departments.map((department) => ({
+      id: department.id,
+      name: department.name,
+      buyers: (buyersByDept[department.id] ?? []).sort((a, b) => a.localeCompare(b))
+    } as DepartmentConfig)),
+    competitors: competitors.map((row) => ({
+      id: row.id,
+      name: row.name,
+      baseUrl: row.base_url,
+      domain: row.domain,
+      adapterKey: row.adapter_key,
+      isEnabled: row.is_enabled
+    } as CompetitorConfig)),
+    runtimeSettings
+  };
+}
+
+export async function createBuyer(name: string, isActive = true) {
+  return supabaseRequest<BuyerRecord[]>({ table: "buyers", method: "POST", headers: { Prefer: "return=representation" }, body: { name, is_active: isActive } });
+}
+
+export async function updateBuyer(id: string, updates: { name?: string; is_active?: boolean; department_ids?: string[]; }) {
+  const buyer = await supabaseRequest<BuyerRecord[]>({ table: "buyers", query: new URLSearchParams({ select: "*", id: `eq.${id}`, limit: "1" }) });
+  if (!buyer[0]) throw new Error("Buyer not found");
+  const { department_ids, ...buyerUpdates } = updates;
+  if (Object.keys(buyerUpdates).length) {
+    await supabaseRequest<BuyerRecord[]>({ table: "buyers", method: "PATCH", query: new URLSearchParams({ id: `eq.${id}` }), headers: { Prefer: "return=representation" }, body: buyerUpdates });
+  }
+  if (department_ids) {
+    await supabaseRequest<unknown[]>({ table: "buyer_departments", method: "DELETE", query: new URLSearchParams({ buyer_id: `eq.${id}` }) });
+    if (department_ids.length) {
+      await supabaseRequest<BuyerDepartmentRecord[]>({ table: "buyer_departments", method: "POST", body: department_ids.map((departmentId) => ({ buyer_id: id, department_id: departmentId })) });
+    }
+  }
+}
+
+export async function deleteBuyerSafe(id: string) {
+  const buyerRows = await supabaseRequest<BuyerRecord[]>({ table: "buyers", query: new URLSearchParams({ select: "name", id: `eq.${id}`, limit: "1" }) });
+  const buyer = buyerRows[0];
+  if (!buyer) throw new Error("Buyer not found");
+  const linkedProducts = await supabaseRequest<Array<{ id: string }>>({ table: "products", query: new URLSearchParams({ select: "id", buyer: `eq.${buyer.name}`, limit: "1" }) });
+  if (linkedProducts.length) {
+    throw new Error(`Cannot delete buyer \"${buyer.name}\" while products still reference it.`);
+  }
+  await supabaseRequest<unknown[]>({ table: "buyers", method: "DELETE", query: new URLSearchParams({ id: `eq.${id}` }) });
+}
+
+export async function createDepartment(name: string) {
+  return supabaseRequest<DepartmentRecord[]>({ table: "departments", method: "POST", headers: { Prefer: "return=representation" }, body: { name } });
+}
+
+export async function updateDepartment(id: string, updates: { name?: string }) {
+  await supabaseRequest<DepartmentRecord[]>({ table: "departments", method: "PATCH", query: new URLSearchParams({ id: `eq.${id}` }), headers: { Prefer: "return=representation" }, body: updates });
+}
+
+export async function deleteDepartmentSafe(id: string) {
+  const departmentRows = await supabaseRequest<DepartmentRecord[]>({ table: "departments", query: new URLSearchParams({ select: "name", id: `eq.${id}`, limit: "1" }) });
+  const department = departmentRows[0];
+  if (!department) throw new Error("Department not found");
+  const linkedProducts = await supabaseRequest<Array<{ id: string }>>({ table: "products", query: new URLSearchParams({ select: "id", department: `eq.${department.name}`, limit: "1" }) });
+  if (linkedProducts.length) {
+    throw new Error(`Cannot delete department \"${department.name}\" while products still reference it.`);
+  }
+  await supabaseRequest<unknown[]>({ table: "departments", method: "DELETE", query: new URLSearchParams({ id: `eq.${id}` }) });
+}
+
+export async function createCompetitor(input: { name: string; base_url: string; domain: string; adapter_key: string; is_enabled: boolean; }) {
+  return supabaseRequest<CompetitorRecord[]>({ table: "competitors", method: "POST", headers: { Prefer: "return=representation" }, body: input });
+}
+
+export async function updateCompetitor(id: string, updates: Partial<{ name: string; base_url: string; domain: string; adapter_key: string; is_enabled: boolean; }>) {
+  return supabaseRequest<CompetitorRecord[]>({ table: "competitors", method: "PATCH", query: new URLSearchParams({ id: `eq.${id}` }), headers: { Prefer: "return=representation" }, body: updates });
+}
+
+export async function deleteCompetitorSafe(id: string) {
+  const rows = await supabaseRequest<CompetitorRecord[]>({ table: "competitors", query: new URLSearchParams({ select: "name", id: `eq.${id}`, limit: "1" }) });
+  const competitor = rows[0];
+  if (!competitor) throw new Error("Competitor not found");
+  const linked = await supabaseRequest<Array<{ id: string }>>({ table: "competitor_prices", query: new URLSearchParams({ select: "id", competitor_name: `eq.${competitor.name}`, limit: "1" }) });
+  if (linked.length) throw new Error(`Cannot delete competitor \"${competitor.name}\" while listings still reference it.`);
+  await supabaseRequest<unknown[]>({ table: "competitors", method: "DELETE", query: new URLSearchParams({ id: `eq.${id}` }) });
 }
