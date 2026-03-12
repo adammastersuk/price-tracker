@@ -37,6 +37,12 @@ function parseCurrencyLike(value: string): number | null {
   return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : null;
 }
 
+function parseGbpCurrency(value: string): number | null {
+  const gbpMatch = decodeHtmlEntities(value).match(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i);
+  if (!gbpMatch) return null;
+  return parseCurrencyLike(gbpMatch[0]);
+}
+
 interface PriceCandidate {
   value: number;
   context: string;
@@ -159,32 +165,32 @@ class CharliesAdapter implements CompetitorAdapter {
     const html = await response.text();
 
     const checkedSelectors = [
-      "span.price.price-base.price--withTax",
-      "[data-product-price-with-tax]",
+      "span[data-test-id=\"product-grid-product-price\"][data-product-price-with-tax]",
+      "input#form-action-addToCart[type=\"submit\"]",
       "stock text near purchase area"
     ];
 
     const selectorDiagnostics: Record<string, boolean> = {};
     const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
 
-    const spanMatch = html.match(/<span[^>]*class=["'][^"']*\bprice\b[^"']*\bprice-base\b[^"']*\bprice--withTax\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+    const spanMatch = html.match(/<span[^>]*data-test-id=["']product-grid-product-price["'][^>]*data-product-price-with-tax(?:\s*=\s*["'][^"']*["'])?[^>]*>([\s\S]*?)<\/span>/i);
     if (spanMatch?.[1]) {
       const extractedText = stripTags(spanMatch[1]);
-      const parsed = parseCurrencyLike(extractedText);
-      selectorDiagnostics["span.price.price-base.price--withTax"] = true;
-      candidateValues.push({ source_selector: "span.price.price-base.price--withTax", extracted_text: extractedText, parsed });
+      const parsed = parseGbpCurrency(extractedText);
+      selectorDiagnostics["span[data-test-id=\"product-grid-product-price\"][data-product-price-with-tax]"] = true;
+      candidateValues.push({ source_selector: "span[data-test-id=\"product-grid-product-price\"][data-product-price-with-tax]", extracted_text: extractedText, parsed });
     } else {
-      selectorDiagnostics["span.price.price-base.price--withTax"] = false;
+      selectorDiagnostics["span[data-test-id=\"product-grid-product-price\"][data-product-price-with-tax]"] = false;
     }
 
-    const attributeMatch = html.match(/data-product-price-with-tax\s*=\s*["']([^"']+)["']/i);
-    if (attributeMatch?.[1]) {
-      const extractedText = decodeHtmlEntities(attributeMatch[1]).trim();
-      const parsed = parseCurrencyLike(extractedText);
-      selectorDiagnostics["[data-product-price-with-tax]"] = true;
-      candidateValues.push({ source_selector: "[data-product-price-with-tax]", extracted_text: extractedText, parsed });
+    const addToBasketMatch = html.match(/<input[^>]*id=["']form-action-addToCart["'][^>]*type=["']submit["'][^>]*value=["']([^"']+)["'][^>]*>/i);
+    if (addToBasketMatch?.[1]) {
+      const extractedText = decodeHtmlEntities(addToBasketMatch[1]).trim();
+      const parsed = parseGbpCurrency(extractedText);
+      selectorDiagnostics["input#form-action-addToCart[type=\"submit\"]"] = true;
+      candidateValues.push({ source_selector: "input#form-action-addToCart[type=\"submit\"]", extracted_text: extractedText, parsed });
     } else {
-      selectorDiagnostics["[data-product-price-with-tax]"] = false;
+      selectorDiagnostics["input#form-action-addToCart[type=\"submit\"]"] = false;
     }
 
     const purchaseArea = findPurchaseArea(html);
@@ -192,7 +198,7 @@ class CharliesAdapter implements CompetitorAdapter {
 
     const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
     if (!accepted || accepted.parsed === null) {
-      const failureMessage = stockText ? "Stock detected but no valid price found" : "Charlies adapter could not find price selector";
+      const failureMessage = `${stockText ? "Stock detected but no valid price found" : "Charlies adapter could not find price selector"}. Selectors attempted: ${checkedSelectors.join(", ")}`;
       throw new AdapterExtractionError(failureMessage, {
         adapter_attempted: this.name,
         selectors_checked: checkedSelectors,
