@@ -20,6 +20,7 @@ import {
   updateRefreshRunItem,
   upsertAlert
 } from "@/lib/operations";
+import { toPlainObject } from "@/lib/json";
 
 export interface RefreshOptions {
   productIds?: string[];
@@ -301,9 +302,25 @@ async function readQueuedTarget(runId: string): Promise<QueuedTarget | null> {
   const rows = await listQueuedRefreshRunItems(runId, 1);
   const row = rows[0];
   if (!row) return null;
-  const target = (row.metadata?.target ?? null) as RefreshTarget | null;
-  if (!target) return null;
-  return { queueItemId: row.id, runId, target };
+  const target = toPlainObject(row.metadata?.target, {}) as Partial<RefreshTarget>;
+  return {
+    queueItemId: row.id,
+    runId,
+    target: {
+      productId: target.productId ?? row.product_id,
+      sku: target.sku ?? "Unknown SKU",
+      productName: target.productName ?? "Unknown product",
+      brand: target.brand ?? "Unknown",
+      bentsPrice: Number(target.bentsPrice ?? 0),
+      competitorName: target.competitorName ?? row.competitor_name ?? "Unknown competitor",
+      competitorUrl: target.competitorUrl ?? row.competitor_url ?? "",
+      mappingId: target.mappingId ?? row.competitor_price_id ?? undefined,
+      previousPrice: typeof target.previousPrice === "number" ? target.previousPrice : null,
+      previousValidPrice: typeof target.previousValidPrice === "number" ? target.previousValidPrice : null,
+      refreshTier: target.refreshTier === "priority" ? "priority" : "default",
+      lastCheckedAt: target.lastCheckedAt
+    }
+  };
 }
 
 async function updateRunCounts(runId: string, update: { succeeded?: number; failed?: number; suspicious?: number; processed?: number; pending?: number; total?: number; }) {

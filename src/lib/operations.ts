@@ -1,5 +1,6 @@
 import { CheckStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
+import { toNullablePlainObject, toPlainObject } from "@/lib/json";
 
 export interface ActivityLogInput {
   event_type: string;
@@ -22,7 +23,11 @@ export interface AlertInput {
 interface RefreshRunRecord { id: string; }
 
 export async function logActivity(entry: ActivityLogInput) {
-  await supabaseRequest<unknown[]>({ table: "activity_log", method: "POST", body: entry });
+  await supabaseRequest<unknown[]>({
+    table: "activity_log",
+    method: "POST",
+    body: { ...entry, metadata: toNullablePlainObject(entry.metadata) }
+  });
 }
 
 export async function getActivity(limit = 50) {
@@ -38,7 +43,7 @@ export async function upsertAlert(input: AlertInput) {
     method: "POST",
     query: new URLSearchParams({ on_conflict: "dedupe_key" }),
     headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: { ...input, status: input.status ?? "new", last_seen_at: new Date().toISOString() }
+    body: { ...input, status: input.status ?? "new", context: toNullablePlainObject(input.context), last_seen_at: new Date().toISOString() }
   });
 }
 
@@ -64,7 +69,7 @@ export async function createRefreshRun(input: { trigger_source: string; schedule
     table: "refresh_runs",
     method: "POST",
     headers: { Prefer: "return=representation" },
-    body: { ...input, started_at: new Date().toISOString() }
+    body: { ...input, metadata: toNullablePlainObject(input.metadata), started_at: new Date().toISOString() }
   });
   return rows[0]?.id;
 }
@@ -74,7 +79,7 @@ export async function updateRefreshRun(runId: string, summary: { total?: number;
     table: "refresh_runs",
     method: "PATCH",
     query: new URLSearchParams({ id: `eq.${runId}` }),
-    body: { ...summary, metadata: summary.metadata }
+    body: { ...summary, metadata: toNullablePlainObject(summary.metadata) }
   });
 }
 
@@ -83,7 +88,7 @@ export async function completeRefreshRun(runId: string, summary: { total: number
     table: "refresh_runs",
     method: "PATCH",
     query: new URLSearchParams({ id: `eq.${runId}` }),
-    body: { ...summary, completed_at: new Date().toISOString(), metadata: summary.metadata }
+    body: { ...summary, completed_at: new Date().toISOString(), metadata: toNullablePlainObject(summary.metadata) }
   });
 }
 
@@ -101,7 +106,11 @@ export async function logRefreshRunItem(input: {
   extraction_source?: string;
   metadata?: Record<string, unknown>;
 }) {
-  await supabaseRequest<unknown[]>({ table: "refresh_run_items", method: "POST", body: { ...input, checked_at: new Date().toISOString() } });
+  await supabaseRequest<unknown[]>({
+    table: "refresh_run_items",
+    method: "POST",
+    body: { ...input, metadata: toNullablePlainObject(input.metadata), checked_at: new Date().toISOString() }
+  });
 }
 
 export interface RefreshRunRow {
@@ -134,10 +143,11 @@ export async function getRefreshRun(runId: string) {
 }
 
 export async function listQueuedRefreshRunItems(runId: string, limit = 1) {
-  return supabaseRequest<RefreshRunItemRow[]>({
+  const rows = await supabaseRequest<RefreshRunItemRow[]>({
     table: "refresh_run_items",
     query: new URLSearchParams({ select: "id,run_id,product_id,competitor_price_id,competitor_name,competitor_url,status,suspicious,metadata", run_id: `eq.${runId}`, status: "eq.queued", order: "checked_at.asc", limit: String(limit) })
   });
+  return rows.map((row) => ({ ...row, metadata: toPlainObject(row.metadata, {}) }));
 }
 
 export async function updateRefreshRunItem(id: string, updates: Partial<RefreshRunItemRow> & { checked_at?: string; duration_ms?: number; error_message?: string; extraction_source?: string; metadata?: Record<string, unknown>; competitor_price_id?: string; competitor_name?: string; competitor_url?: string; status?: string; suspicious?: boolean; }) {
@@ -145,7 +155,7 @@ export async function updateRefreshRunItem(id: string, updates: Partial<RefreshR
     table: "refresh_run_items",
     method: "PATCH",
     query: new URLSearchParams({ id: `eq.${id}` }),
-    body: updates
+    body: { ...updates, metadata: toNullablePlainObject(updates.metadata) }
   });
 }
 
