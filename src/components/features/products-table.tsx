@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button, Card, CardContent, Input, Select } from "@/components/ui/primitives";
+import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import { PricingStatusChip, WorkflowChip } from "@/components/features/status-chip";
 import { defaultFilters, queryProducts, uniqueValues } from "@/lib/data-service";
 import { exportProductsCsv } from "@/lib/csv";
@@ -92,10 +94,13 @@ const formatDiff = (listing: CompetitorListing) => {
   return { line1, line2, tone: direction === "cheaper" ? "text-emerald-700" : "text-rose-700" };
 };
 
-interface ConfiguredOptions { buyers: string[]; departments: string[]; competitors: string[]; }
+interface ConfiguredOptions { buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments?: Record<string, string[]>; }
 
 export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredOptions }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; configuredOptions?: ConfiguredOptions; }) {
   const [filters, setFilters] = useState({ ...defaultFilters, ...initialFilters });
+  const router = useRouter();
+  const pathname = usePathname();
+  const [autoAdjustMessage, setAutoAdjustMessage] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
@@ -147,6 +152,33 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
       competitors: configuredOptions?.competitors?.length ? configuredOptions.competitors : derived.competitors
     };
   }, [rows, configuredOptions]);
+  const availableDepartments = useMemo(() => {
+    if (filters.buyers.length === 0) return values.departments;
+    const union = new Set<string>();
+    filters.buyers.forEach((buyer) => (configuredOptions?.buyerDepartments?.[buyer] ?? []).forEach((department) => union.add(department)));
+    return values.departments.filter((department) => union.has(department));
+  }, [filters.buyers, values.departments, configuredOptions?.buyerDepartments]);
+
+  useEffect(() => {
+    setFilters((prev) => {
+      const pruned = prev.departments.filter((department) => availableDepartments.includes(department));
+      if (pruned.length === prev.departments.length) return prev;
+      setAutoAdjustMessage("Department selection updated to match selected buyers.");
+      return { ...prev, departments: pruned };
+    });
+  }, [availableDepartments]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.buyers.length) params.set("buyers", filters.buyers.map(encodeURIComponent).join(","));
+    if (filters.departments.length) params.set("departments", filters.departments.map(encodeURIComponent).join(","));
+    if (filters.competitors.length) params.set("competitors", filters.competitors.map(encodeURIComponent).join(","));
+    if (filters.statuses.length) params.set("status", filters.statuses.map(encodeURIComponent).join(","));
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [filters, pathname, router]);
+
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
   const selectedRows = useMemo(() => rows.filter((row) => selectedIds.includes(row.id)), [rows, selectedIds]);
   const visibleSelectedCount = useMemo(() => filteredRows.filter((row) => selectedIds.includes(row.id)).length, [filteredRows, selectedIds]);
@@ -417,14 +449,15 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
   return (
     <div className="space-y-4">
-      <Card><CardContent className="grid gap-3 md:grid-cols-3 lg:grid-cols-7">
-        <Input placeholder="Search SKU or product" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} className="lg:col-span-2" />
-        <Select value={filters.buyer} onChange={(e) => setFilters({ ...filters, buyer: e.target.value })}><option value="all">All buyer</option>{values.buyers.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}><option value="all">All department</option>{values.departments.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.supplier} onChange={(e) => setFilters({ ...filters, supplier: e.target.value })}><option value="all">All supplier</option>{values.suppliers.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.competitor} onChange={(e) => setFilters({ ...filters, competitor: e.target.value })}><option value="all">All competitor</option>{values.competitors.map((v) => <option key={v}>{v}</option>)}</Select>
-        <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="all">All status</option>{values.statuses.map((v) => <option key={v}>{v}</option>)}</Select>
+      <Card><CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
+        <Input placeholder="Search SKU or product" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} className="lg:col-span-1" />
+        <MultiSelectFilter label="Buyers" allLabel="All buyers" options={values.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} />
+        <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} />
+        <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={values.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} />
+        <MultiSelectFilter label="Competitors" allLabel="All competitors" options={values.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} />
+        <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...values.statuses, ...values.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} />
       </CardContent></Card>
+      {autoAdjustMessage && <p className="text-xs text-slate-500">{autoAdjustMessage}</p>}
       <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
       {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
       {message && <p className="text-sm text-slate-700">{message}</p>}
