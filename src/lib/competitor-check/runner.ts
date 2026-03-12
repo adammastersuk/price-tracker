@@ -214,26 +214,31 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
     mappingId = inserted[0]?.id;
   }
 
-  await insertPriceHistory({
-    product_id: target.productId,
-    competitor_name: target.competitorName || "Unknown competitor",
-    competitor_url: target.competitorUrl,
-    competitor_price_id: mappingId,
-    price: acceptedCurrentPrice ?? undefined,
-    current_price: acceptedCurrentPrice ?? undefined,
-    promo_price: result.competitor_promo_price ?? undefined,
-    was_price: (suspicious ? target.previousValidPrice : result.competitor_was_price) ?? undefined,
-    checked_at: now,
-    captured_at: now,
-    last_check_status: suspicious ? "suspicious" : "success",
-    suspicious_change_flag: suspicious,
-    extraction_source: result.extraction_source,
-    extraction_metadata: {
-      ...(result.metadata ?? {}),
-      trust_rejected: suspicious,
-      trust_warnings: reasons
-    }
-  });
+  try {
+    await insertPriceHistory({
+      product_id: target.productId,
+      competitor_name: target.competitorName || "Unknown competitor",
+      competitor_url: target.competitorUrl,
+      competitor_price_id: mappingId,
+      price: acceptedCurrentPrice ?? undefined,
+      current_price: acceptedCurrentPrice ?? undefined,
+      promo_price: result.competitor_promo_price ?? undefined,
+      was_price: (suspicious ? target.previousValidPrice : result.competitor_was_price) ?? undefined,
+      checked_at: now,
+      captured_at: now,
+      last_check_status: suspicious ? "suspicious" : "success",
+      suspicious_change_flag: suspicious,
+      extraction_source: result.extraction_source,
+      extraction_metadata: {
+        ...(result.metadata ?? {}),
+        trust_rejected: suspicious,
+        trust_warnings: reasons
+      }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to insert price history", error);
+  }
 
   if (suspicious) {
     await upsertAlert({
@@ -320,6 +325,61 @@ async function readQueuedTarget(runId: string): Promise<QueuedTarget | null> {
       refreshTier: target.refreshTier === "priority" ? "priority" : "default",
       lastCheckedAt: target.lastCheckedAt
     }
+  };
+}
+
+
+
+async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; }> {
+  if (!target.competitorUrl) {
+    const reason = "Missing competitor URL";
+    await saveFailure(target, reason);
+    return { failure: { productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason }, succeeded: false };
+  }
+
+  try {
+    const adapter = selectAdapter(target.competitorUrl);
+    const result = await adapter.fetchPriceSignal({
+      sku: target.sku,
+      competitorUrl: target.competitorUrl,
+      productName: target.productName,
+      brand: target.brand
+    });
+    const saveResult = await saveSuccess(target, result, runtime);
+    return { suspicious: saveResult.suspicious, succeeded: true };
+  } catch (error) {
+    const reason = (error as Error).message;
+    const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
+    await saveFailure(target, reason, diagnostics);
+    return { failure: { productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason }, succeeded: false };
+  }
+}
+
+export async function runCompetitorRefreshInline(options: RefreshOptions = {}): Promise<RefreshSummary> {
+  const runtime = await getRuntimeSettings();
+  const targets = await buildTargets(options, runtime);
+  const limit = Math.max(1, Number(options.batchSize ?? runtime.scrapeDefaults.batchSize) || runtime.scrapeDefaults.batchSize);
+  const selected = targets.slice(0, limit);
+  const failures: RefreshFailure[] = [];
+  let succeeded = 0;
+  let failed = 0;
+  let suspicious = 0;
+
+  for (const target of selected) {
+    const result = await processTarget(target, runtime);
+    if (result.failure) failures.push(result.failure);
+    if (result.succeeded) succeeded += 1;
+    else failed += 1;
+    if (result.suspicious) suspicious += 1;
+  }
+
+  return {
+    total: selected.length,
+    processed: selected.length,
+    succeeded,
+    failed,
+    suspicious,
+    failures
   };
 }
 

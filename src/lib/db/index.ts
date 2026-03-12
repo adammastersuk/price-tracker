@@ -492,23 +492,29 @@ export async function mergeProducts(sourceProductId: string, targetProductId: st
 }
 
 export async function getRuntimeSettings(): Promise<RuntimeSettings> {
-  const rows = await supabaseRequest<AppSettingRecord[]>({ table: "app_settings", query: new URLSearchParams({ select: "*" }) });
-  const map = new Map(rows.map((row) => [row.key, toPlainObject(row.value, {})]));
-  const scrape = map.get("scrape_defaults") as RuntimeSettings["scrapeDefaults"] | undefined;
-  const tolerance = map.get("tolerance_settings") as RuntimeSettings["toleranceSettings"] | undefined;
+  try {
+    const rows = await supabaseRequest<AppSettingRecord[]>({ table: "app_settings", query: new URLSearchParams({ select: "*" }) });
+    const map = new Map(rows.map((row) => [row.key, toPlainObject(row.value, {})]));
+    const scrape = map.get("scrape_defaults") as RuntimeSettings["scrapeDefaults"] | undefined;
+    const tolerance = map.get("tolerance_settings") as RuntimeSettings["toleranceSettings"] | undefined;
 
-  return {
-    scrapeDefaults: {
-      staleCheckHours: Number(scrape?.staleCheckHours ?? defaultRuntimeSettings.scrapeDefaults.staleCheckHours),
-      batchSize: Number(scrape?.batchSize ?? defaultRuntimeSettings.scrapeDefaults.batchSize),
-      defaultRefreshFrequencyHours: Number(scrape?.defaultRefreshFrequencyHours ?? defaultRuntimeSettings.scrapeDefaults.defaultRefreshFrequencyHours)
-    },
-    toleranceSettings: {
-      inLinePricingTolerancePercent: Number(tolerance?.inLinePricingTolerancePercent ?? defaultRuntimeSettings.toleranceSettings.inLinePricingTolerancePercent),
-      suspiciousLowPriceThresholdPercent: Number(tolerance?.suspiciousLowPriceThresholdPercent ?? defaultRuntimeSettings.toleranceSettings.suspiciousLowPriceThresholdPercent),
-      suspiciousHighPriceThresholdPercent: Number(tolerance?.suspiciousHighPriceThresholdPercent ?? defaultRuntimeSettings.toleranceSettings.suspiciousHighPriceThresholdPercent)
-    }
-  };
+    return {
+      scrapeDefaults: {
+        staleCheckHours: Number(scrape?.staleCheckHours ?? defaultRuntimeSettings.scrapeDefaults.staleCheckHours),
+        batchSize: Number(scrape?.batchSize ?? defaultRuntimeSettings.scrapeDefaults.batchSize),
+        defaultRefreshFrequencyHours: Number(scrape?.defaultRefreshFrequencyHours ?? defaultRuntimeSettings.scrapeDefaults.defaultRefreshFrequencyHours)
+      },
+      toleranceSettings: {
+        inLinePricingTolerancePercent: Number(tolerance?.inLinePricingTolerancePercent ?? defaultRuntimeSettings.toleranceSettings.inLinePricingTolerancePercent),
+        suspiciousLowPriceThresholdPercent: Number(tolerance?.suspiciousLowPriceThresholdPercent ?? defaultRuntimeSettings.toleranceSettings.suspiciousLowPriceThresholdPercent),
+        suspiciousHighPriceThresholdPercent: Number(tolerance?.suspiciousHighPriceThresholdPercent ?? defaultRuntimeSettings.toleranceSettings.suspiciousHighPriceThresholdPercent)
+      }
+    };
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to load runtime settings; using defaults", error);
+    return defaultRuntimeSettings;
+  }
 }
 
 export async function updateAppSetting(key: string, value: Record<string, unknown>) {

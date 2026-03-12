@@ -23,11 +23,16 @@ export interface AlertInput {
 interface RefreshRunRecord { id: string; }
 
 export async function logActivity(entry: ActivityLogInput) {
-  await supabaseRequest<unknown[]>({
-    table: "activity_log",
-    method: "POST",
-    body: { ...entry, metadata: toNullablePlainObject(entry.metadata) }
-  });
+  try {
+    await supabaseRequest<unknown[]>({
+      table: "activity_log",
+      method: "POST",
+      body: { ...entry, metadata: toNullablePlainObject(entry.metadata) }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to write activity log entry", error);
+  }
 }
 
 export async function getActivity(limit = 50) {
@@ -38,13 +43,19 @@ export async function getActivity(limit = 50) {
 }
 
 export async function upsertAlert(input: AlertInput) {
-  return supabaseRequest<unknown[]>({
-    table: "alerts",
-    method: "POST",
-    query: new URLSearchParams({ on_conflict: "dedupe_key" }),
-    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: { ...input, status: input.status ?? "new", context: toNullablePlainObject(input.context), last_seen_at: new Date().toISOString() }
-  });
+  try {
+    return await supabaseRequest<unknown[]>({
+      table: "alerts",
+      method: "POST",
+      query: new URLSearchParams({ on_conflict: "dedupe_key" }),
+      headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+      body: { ...input, status: input.status ?? "new", context: toNullablePlainObject(input.context), last_seen_at: new Date().toISOString() }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to upsert alert", error);
+    return [];
+  }
 }
 
 export async function getAlerts(limit = 100) {
@@ -65,31 +76,47 @@ export async function updateAlertStatus(id: string, status: "new" | "acknowledge
 }
 
 export async function createRefreshRun(input: { trigger_source: string; schedule_mode: string; metadata?: Record<string, unknown>; total?: number; processed?: number; succeeded?: number; failed?: number; suspicious?: number; }) {
-  const rows = await supabaseRequest<RefreshRunRecord[]>({
-    table: "refresh_runs",
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: { ...input, metadata: toNullablePlainObject(input.metadata), started_at: new Date().toISOString() }
-  });
-  return rows[0]?.id;
+  try {
+    const rows = await supabaseRequest<RefreshRunRecord[]>({
+      table: "refresh_runs",
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: { ...input, metadata: toNullablePlainObject(input.metadata), started_at: new Date().toISOString() }
+    });
+    return rows[0]?.id;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to create refresh run record", error);
+    return undefined;
+  }
 }
 
 export async function updateRefreshRun(runId: string, summary: { total?: number; processed?: number; succeeded?: number; failed?: number; suspicious?: number; metadata?: Record<string, unknown> }) {
-  await supabaseRequest<unknown[]>({
-    table: "refresh_runs",
-    method: "PATCH",
-    query: new URLSearchParams({ id: `eq.${runId}` }),
-    body: { ...summary, metadata: toNullablePlainObject(summary.metadata) }
-  });
+  try {
+    await supabaseRequest<unknown[]>({
+      table: "refresh_runs",
+      method: "PATCH",
+      query: new URLSearchParams({ id: `eq.${runId}` }),
+      body: { ...summary, metadata: toNullablePlainObject(summary.metadata) }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(`Failed to update refresh run ${runId}`, error);
+  }
 }
 
 export async function completeRefreshRun(runId: string, summary: { total: number; processed: number; succeeded: number; failed: number; suspicious: number; metadata?: Record<string, unknown> }) {
-  await supabaseRequest<unknown[]>({
-    table: "refresh_runs",
-    method: "PATCH",
-    query: new URLSearchParams({ id: `eq.${runId}` }),
-    body: { ...summary, completed_at: new Date().toISOString(), metadata: toNullablePlainObject(summary.metadata) }
-  });
+  try {
+    await supabaseRequest<unknown[]>({
+      table: "refresh_runs",
+      method: "PATCH",
+      query: new URLSearchParams({ id: `eq.${runId}` }),
+      body: { ...summary, completed_at: new Date().toISOString(), metadata: toNullablePlainObject(summary.metadata) }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(`Failed to complete refresh run ${runId}`, error);
+  }
 }
 
 export async function logRefreshRunItem(input: {
@@ -106,11 +133,16 @@ export async function logRefreshRunItem(input: {
   extraction_source?: string;
   metadata?: Record<string, unknown>;
 }) {
-  await supabaseRequest<unknown[]>({
-    table: "refresh_run_items",
-    method: "POST",
-    body: { ...input, metadata: toNullablePlainObject(input.metadata), checked_at: new Date().toISOString() }
-  });
+  try {
+    await supabaseRequest<unknown[]>({
+      table: "refresh_run_items",
+      method: "POST",
+      body: { ...input, metadata: toNullablePlainObject(input.metadata), checked_at: new Date().toISOString() }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to log refresh run item", error);
+  }
 }
 
 export interface RefreshRunRow {
@@ -151,12 +183,18 @@ export async function listQueuedRefreshRunItems(runId: string, limit = 1) {
 }
 
 export async function updateRefreshRunItem(id: string, updates: Partial<RefreshRunItemRow> & { checked_at?: string; duration_ms?: number; error_message?: string; extraction_source?: string; metadata?: Record<string, unknown>; competitor_price_id?: string; competitor_name?: string; competitor_url?: string; status?: string; suspicious?: boolean; }) {
-  return supabaseRequest<unknown[]>({
-    table: "refresh_run_items",
-    method: "PATCH",
-    query: new URLSearchParams({ id: `eq.${id}` }),
-    body: { ...updates, metadata: toNullablePlainObject(updates.metadata) }
-  });
+  try {
+    return await supabaseRequest<unknown[]>({
+      table: "refresh_run_items",
+      method: "PATCH",
+      query: new URLSearchParams({ id: `eq.${id}` }),
+      body: { ...updates, metadata: toNullablePlainObject(updates.metadata) }
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(`Failed to update refresh run item ${id}`, error);
+    return [];
+  }
 }
 
 export interface SavedViewState {

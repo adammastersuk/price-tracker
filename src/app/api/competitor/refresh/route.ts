@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { enqueueCompetitorRefresh, processOneQueuedRefresh } from "@/lib/competitor-check/runner";
+import { enqueueCompetitorRefresh, processOneQueuedRefresh, runCompetitorRefreshInline } from "@/lib/competitor-check/runner";
 import { safeParseJson } from "@/lib/json";
 
 export async function POST(request: NextRequest) {
@@ -28,7 +28,14 @@ export async function POST(request: NextRequest) {
     });
 
     if (!queued.runId) {
-      return NextResponse.json({ data: { total: 0, processed: 0, succeeded: 0, failed: 0, suspicious: 0, failures: [], pending: 0 } });
+      const summary = await runCompetitorRefreshInline({
+        productIds,
+        competitorListingIds,
+        batchSize: typeof payload.batchSize === "number" ? payload.batchSize : undefined,
+        scheduleMode: payload.scheduleMode === "priority" || payload.scheduleMode === "daily" ? payload.scheduleMode : "manual",
+        triggerSource: "manual"
+      });
+      return NextResponse.json({ data: summary });
     }
 
     const summary = await processOneQueuedRefresh(queued.runId);
