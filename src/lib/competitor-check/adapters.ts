@@ -106,6 +106,15 @@ function hostFromUrl(raw: string): string {
   }
 }
 
+function normalizeHostname(host: string): string {
+  return host.toLowerCase().replace(/^www\./, "");
+}
+
+function isRuxleyManorHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /^ruxley-?manor\.co\.uk$/i.test(normalizedHost);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -597,7 +606,7 @@ class RuxleyManorAdapter implements CompetitorAdapter {
   name = "ruxley-manor";
 
   supports(url: string) {
-    return /ruxleymanor\.co\.uk/i.test(hostFromUrl(url) || url);
+    return isRuxleyManorHost(url);
   }
 
   async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
@@ -681,6 +690,8 @@ class RuxleyManorAdapter implements CompetitorAdapter {
         extracted_text: accepted.extracted_text,
         source_selector: accepted.source_selector,
         adapter_attempted: this.name,
+        matched_hostname: hostFromUrl(input.competitorUrl),
+        normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
         selectors_checked: checkedSelectors,
         selectors_found: selectorsFound,
         candidate_values_found: candidateValues,
@@ -725,7 +736,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (/gardenfurnitureworld\.co\.uk/i.test(host)) return false;
     if (/charlies\.co\.uk/i.test(host)) return false;
     if (/whitehallgardencentre\.co\.uk|whitehall/i.test(host)) return false;
-    if (/ruxleymanor\.co\.uk/i.test(host)) return false;
+    if (isRuxleyManorHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
