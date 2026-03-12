@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createCompetitor, getSettingsConfig } from "@/lib/db";
+import { canonicalizeDomain } from "@/lib/matching";
+import { ensureUniqueSetting, validateCompetitorUrls } from "@/lib/settings-validation";
 
 export async function GET() {
   try {
@@ -22,10 +24,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "name, baseUrl and domain are required" }, { status: 400 });
     }
 
+    const urlValidationError = validateCompetitorUrls(baseUrl, domain);
+    if (urlValidationError) return NextResponse.json({ error: urlValidationError }, { status: 400 });
+    await ensureUniqueSetting("competitor-name", name);
+    await ensureUniqueSetting("competitor-domain", domain);
+
     const created = await createCompetitor({
       name,
       base_url: baseUrl,
-      domain,
+      domain: canonicalizeDomain(domain),
       adapter_key: adapterKey,
       is_enabled: isEnabled
     });

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteBuyerSafe, updateBuyer } from "@/lib/db";
+import { ensureUniqueSetting } from "@/lib/settings-validation";
 
 export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const payload = await request.json();
+    if (typeof payload?.name === "string") await ensureUniqueSetting("buyer", payload.name, params.id);
     await updateBuyer(params.id, {
       name: typeof payload?.name === "string" ? payload.name.trim() : undefined,
       is_active: typeof payload?.isActive === "boolean" ? payload.isActive : undefined,

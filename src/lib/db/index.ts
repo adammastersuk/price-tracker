@@ -64,12 +64,14 @@ export interface BuyerConfig {
   name: string;
   isActive: boolean;
   departments: string[];
+  usedByProducts: number;
 }
 
 export interface DepartmentConfig {
   id: string;
   name: string;
   buyers: string[];
+  usedByProducts: number;
 }
 
 export interface CompetitorConfig {
@@ -79,6 +81,7 @@ export interface CompetitorConfig {
   domain: string;
   adapterKey: string;
   isEnabled: boolean;
+  usedByProducts: number;
 }
 
 export interface RuntimeSettings {
@@ -483,12 +486,14 @@ export async function updateAppSetting(key: string, value: Record<string, unknow
 }
 
 export async function getSettingsConfig() {
-  const [buyers, departments, mappings, competitors, runtimeSettings] = await Promise.all([
+  const [buyers, departments, mappings, competitors, runtimeSettings, products, competitorPrices] = await Promise.all([
     supabaseRequest<BuyerRecord[]>({ table: "buyers", query: new URLSearchParams({ select: "*", order: "name.asc" }) }),
     supabaseRequest<DepartmentRecord[]>({ table: "departments", query: new URLSearchParams({ select: "*", order: "name.asc" }) }),
     supabaseRequest<BuyerDepartmentRecord[]>({ table: "buyer_departments", query: new URLSearchParams({ select: "*" }) }),
     supabaseRequest<CompetitorRecord[]>({ table: "competitors", query: new URLSearchParams({ select: "*", order: "name.asc" }) }),
-    getRuntimeSettings()
+    getRuntimeSettings(),
+    supabaseRequest<Array<{ buyer: string | null; department: string | null }>>({ table: "products", query: new URLSearchParams({ select: "buyer,department" }) }),
+    supabaseRequest<Array<{ competitor_name: string | null }>>({ table: "competitor_prices", query: new URLSearchParams({ select: "competitor_name" }) })
   ]);
 
   const departmentsById = new Map(departments.map((d) => [d.id, d.name]));
@@ -499,6 +504,23 @@ export async function getSettingsConfig() {
     if (deptName) acc[mapping.buyer_id].push(deptName);
     return acc;
   }, {});
+
+  const buyerUsage = products.reduce<Record<string, number>>((acc, row) => {
+    const key = row.buyer?.trim();
+    if (key) acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const departmentUsage = products.reduce<Record<string, number>>((acc, row) => {
+    const key = row.department?.trim();
+    if (key) acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const competitorUsage = competitorPrices.reduce<Record<string, number>>((acc, row) => {
+    const key = row.competitor_name?.trim();
+    if (key) acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+
   const buyersByDept = mappings.reduce<Record<string, string[]>>((acc, mapping) => {
     acc[mapping.department_id] = acc[mapping.department_id] ?? [];
     const buyerName = buyersById.get(mapping.buyer_id);
@@ -511,12 +533,14 @@ export async function getSettingsConfig() {
       id: buyer.id,
       name: buyer.name,
       isActive: buyer.is_active,
-      departments: (deptsByBuyer[buyer.id] ?? []).sort((a, b) => a.localeCompare(b))
+      departments: (deptsByBuyer[buyer.id] ?? []).sort((a, b) => a.localeCompare(b)),
+      usedByProducts: buyerUsage[buyer.name] ?? 0
     } as BuyerConfig)),
     departments: departments.map((department) => ({
       id: department.id,
       name: department.name,
-      buyers: (buyersByDept[department.id] ?? []).sort((a, b) => a.localeCompare(b))
+      buyers: (buyersByDept[department.id] ?? []).sort((a, b) => a.localeCompare(b)),
+      usedByProducts: departmentUsage[department.name] ?? 0
     } as DepartmentConfig)),
     competitors: competitors.map((row) => ({
       id: row.id,
@@ -524,7 +548,8 @@ export async function getSettingsConfig() {
       baseUrl: row.base_url,
       domain: row.domain,
       adapterKey: row.adapter_key,
-      isEnabled: row.is_enabled
+      isEnabled: row.is_enabled,
+      usedByProducts: competitorUsage[row.name] ?? 0
     } as CompetitorConfig)),
     runtimeSettings
   };
@@ -553,9 +578,9 @@ export async function deleteBuyerSafe(id: string) {
   const buyerRows = await supabaseRequest<BuyerRecord[]>({ table: "buyers", query: new URLSearchParams({ select: "name", id: `eq.${id}`, limit: "1" }) });
   const buyer = buyerRows[0];
   if (!buyer) throw new Error("Buyer not found");
-  const linkedProducts = await supabaseRequest<Array<{ id: string }>>({ table: "products", query: new URLSearchParams({ select: "id", buyer: `eq.${buyer.name}`, limit: "1" }) });
+  const linkedProducts = await supabaseRequest<Array<{ id: string }>>({ table: "products", query: new URLSearchParams({ select: "id", buyer: `eq.${buyer.name}` }) });
   if (linkedProducts.length) {
-    throw new Error(`Cannot delete buyer \"${buyer.name}\" while products still reference it.`);
+    throw new Error(`Cannot delete buyer \"${buyer.name}\" because it is used by ${linkedProducts.length} product${linkedProducts.length === 1 ? "" : "s"}. Reassign those products first.`);
   }
   await supabaseRequest<unknown[]>({ table: "buyers", method: "DELETE", query: new URLSearchParams({ id: `eq.${id}` }) });
 }
@@ -572,9 +597,9 @@ export async function deleteDepartmentSafe(id: string) {
   const departmentRows = await supabaseRequest<DepartmentRecord[]>({ table: "departments", query: new URLSearchParams({ select: "name", id: `eq.${id}`, limit: "1" }) });
   const department = departmentRows[0];
   if (!department) throw new Error("Department not found");
-  const linkedProducts = await supabaseRequest<Array<{ id: string }>>({ table: "products", query: new URLSearchParams({ select: "id", department: `eq.${department.name}`, limit: "1" }) });
+  const linkedProducts = await supabaseRequest<Array<{ id: string }>>({ table: "products", query: new URLSearchParams({ select: "id", department: `eq.${department.name}` }) });
   if (linkedProducts.length) {
-    throw new Error(`Cannot delete department \"${department.name}\" while products still reference it.`);
+    throw new Error(`Cannot delete department \"${department.name}\" because it is used by ${linkedProducts.length} product${linkedProducts.length === 1 ? "" : "s"}. Reassign those products first.`);
   }
   await supabaseRequest<unknown[]>({ table: "departments", method: "DELETE", query: new URLSearchParams({ id: `eq.${id}` }) });
 }
@@ -591,7 +616,7 @@ export async function deleteCompetitorSafe(id: string) {
   const rows = await supabaseRequest<CompetitorRecord[]>({ table: "competitors", query: new URLSearchParams({ select: "name", id: `eq.${id}`, limit: "1" }) });
   const competitor = rows[0];
   if (!competitor) throw new Error("Competitor not found");
-  const linked = await supabaseRequest<Array<{ id: string }>>({ table: "competitor_prices", query: new URLSearchParams({ select: "id", competitor_name: `eq.${competitor.name}`, limit: "1" }) });
-  if (linked.length) throw new Error(`Cannot delete competitor \"${competitor.name}\" while listings still reference it.`);
+  const linked = await supabaseRequest<Array<{ id: string }>>({ table: "competitor_prices", query: new URLSearchParams({ select: "id", competitor_name: `eq.${competitor.name}` }) });
+  if (linked.length) throw new Error(`Cannot delete competitor \"${competitor.name}\" because it is used by ${linked.length} listing${linked.length === 1 ? "" : "s"}. Reassign those listings first.`);
   await supabaseRequest<unknown[]>({ table: "competitors", method: "DELETE", query: new URLSearchParams({ id: `eq.${id}` }) });
 }
