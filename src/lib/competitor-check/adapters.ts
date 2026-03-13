@@ -728,6 +728,12 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
 
     if (!response.ok) throw new AdapterExtractionError(`Gates adapter failed: HTTP ${response.status}`);
     const html = await response.text();
+    const htmlSignals = {
+      contains_woocommerce_price_amount: /woocommerce-Price-amount/i.test(html),
+      contains_product_title: /product_title/i.test(html),
+      contains_ast_stock_detail: /ast-stock-detail/i.test(html),
+      contains_add_to_basket: /add\s*to\s*basket/i.test(html)
+    };
 
     const checkedSelectors = [
       "p.price .woocommerce-Price-amount.amount",
@@ -795,7 +801,10 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
           candidate_values_found: candidateValues,
           accepted_value: null,
           rejected_values: candidateValues,
-          rejection_reasons: ["required_woocommerce_price_selector_missing_or_invalid"]
+          rejection_reasons: ["required_woocommerce_price_selector_missing_or_invalid"],
+          parsed_hostname: hostFromUrl(input.competitorUrl),
+          selected_adapter: this.name,
+          html_signals: htmlSignals
         }
       );
     }
@@ -824,7 +833,10 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
         candidate_values_found: candidateValues,
         accepted_value: accepted.parsed,
         rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
-        rejection_reasons: []
+        rejection_reasons: [],
+        parsed_hostname: hostFromUrl(input.competitorUrl),
+        selected_adapter: this.name,
+        html_signals: htmlSignals
       }
     };
   }
