@@ -130,6 +130,11 @@ function isSquiresHost(raw: string): boolean {
   return /(^|\.)squiresgardencentres\.co\.uk$/i.test(normalizedHost) || /(^|\.)squires\.co\.uk$/i.test(normalizedHost);
 }
 
+function isYorkshireGardenCentresHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)yorkshiregardencentres\.co\.uk$/i.test(normalizedHost);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -1285,6 +1290,129 @@ class SquiresAdapter implements CompetitorAdapter {
   }
 }
 
+class YorkshireGardenCentresAdapter implements CompetitorAdapter {
+  name = "yorkshire-garden-centres";
+
+  supports(url: string) {
+    return isYorkshireGardenCentresHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Yorkshire Garden Centres adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      ".price__sale .price-item.price-item--sale",
+      ".price__regular .price-item.price-item--regular",
+      ".price-item.price-item--regular",
+      ".price__container .price-item"
+    ];
+
+    const selectorPatterns: Array<{ selector: string; pattern: RegExp; kind: "sale" | "regular" | "fallback" }> = [
+      {
+        selector: ".price__sale .price-item.price-item--sale",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice__sale\b[^"']*["'][^>]*>[\s\S]{0,900}?<[^>]*class=["'][^"']*\bprice-item\b[^"']*\bprice-item--sale\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        kind: "sale"
+      },
+      {
+        selector: ".price__regular .price-item.price-item--regular",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice__regular\b[^"']*["'][^>]*>[\s\S]{0,900}?<[^>]*class=["'][^"']*\bprice-item\b[^"']*\bprice-item--regular\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        kind: "regular"
+      },
+      {
+        selector: ".price-item.price-item--regular",
+        pattern: /<[^>]*class=["'][^"']*\bprice-item\b[^"']*\bprice-item--regular\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        kind: "regular"
+      },
+      {
+        selector: ".price__container .price-item",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice__container\b[^"']*["'][^>]*>[\s\S]{0,1200}?<[^>]*class=["'][^"']*\bprice-item\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        kind: "fallback"
+      }
+    ];
+
+    const selectorsFound: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null; kind: string }> = [];
+
+    for (const { selector, pattern, kind } of selectorPatterns) {
+      const match = html.match(pattern);
+      const extractedText = match?.[1] ? stripTags(match[1]) : "";
+      selectorsFound[selector] = Boolean(extractedText);
+      if (!extractedText) continue;
+      const parsed = parseGbpCurrency(extractedText);
+      candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed, kind });
+    }
+
+    const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
+    if (!accepted?.parsed) {
+      throw new AdapterExtractionError(
+        `Yorkshire Garden Centres price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}`,
+        {
+          adapter_attempted: this.name,
+          matched_hostname: hostFromUrl(input.competitorUrl),
+          normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          accepted_value: null,
+          rejected_values: candidateValues,
+          rejection_reasons: ["required_shopify_price_selector_missing_or_invalid"]
+        }
+      );
+    }
+
+    const compareAtMatch = html.match(
+      /<[^>]*class=["'][^"']*\bprice-item\b[^"']*\bprice-item--regular\b[^"']*["'][^>]*>([\s\S]*?)<\//i
+    );
+    const compareAtText = compareAtMatch?.[1] ? stripTags(compareAtMatch[1]) : "";
+    const compareAtPrice = compareAtText ? parseGbpCurrency(compareAtText) : null;
+    const wasPrice = compareAtPrice && compareAtPrice > accepted.parsed ? compareAtPrice : null;
+
+    const pageText = stripTags(html);
+    const stock = /\bout\s+of\s+stock\b|\bsold\s+out\b|\bunavailable\b/i.test(pageText)
+      ? "Out of Stock"
+      : /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/i.test(pageText)
+        ? "Low Stock"
+        : /\bin\s+stock\b/i.test(pageText)
+          ? "In Stock"
+          : "Unknown";
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: wasPrice,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "yorkshire_garden_centres_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        source_kind: accepted.kind,
+        adapter_attempted: this.name,
+        matched_hostname: hostFromUrl(input.competitorUrl),
+        normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: [],
+        compare_at_candidate: compareAtText ? { extracted_text: compareAtText, parsed: compareAtPrice } : null
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -1323,6 +1451,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (isScotsdalesHost(host)) return false;
     if (isWebbsHost(host)) return false;
     if (isSquiresHost(host)) return false;
+    if (isYorkshireGardenCentresHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -1396,6 +1525,7 @@ const adapters: CompetitorAdapter[] = [
   new ScotsdalesAdapter(),
   new WebbsAdapter(),
   new SquiresAdapter(),
+  new YorkshireGardenCentresAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
