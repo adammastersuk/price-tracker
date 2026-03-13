@@ -579,6 +579,34 @@ export function ProductsTable({
   );
   const [productForm, setProductForm] = useState<ProductForm | null>(null);
   const [competitorForm, setCompetitorForm] = useState<CompetitorListing[]>([]);
+  const drawerOpen = Boolean(selected && productForm);
+
+  const lowestTrustedCompetitor = useMemo(() => {
+    if (!selected) return null;
+    const valid = competitorForm.filter(
+      (listing) =>
+        listing.lastCheckStatus === "success" &&
+        listing.competitorCurrentPrice !== null &&
+        listing.competitorCurrentPrice > 0 &&
+        listing.extractionMetadata?.trust_rejected !== true,
+    );
+    if (!valid.length) return null;
+    return [...valid].sort(
+      (a, b) =>
+        (a.competitorCurrentPrice ?? Number.POSITIVE_INFINITY) -
+        (b.competitorCurrentPrice ?? Number.POSITIVE_INFINITY),
+    )[0];
+  }, [competitorForm, selected]);
+
+  const priceSummaryText = useMemo(() => {
+    if (!selected) return "No competitor benchmark available yet.";
+    if (!lowestTrustedCompetitor?.competitorCurrentPrice)
+      return "No valid competitor price available yet.";
+    const diff = selected.bentsRetailPrice - lowestTrustedCompetitor.competitorCurrentPrice;
+    if (Math.abs(diff) < 0.005) return "In line with lowest competitor.";
+    if (diff > 0) return `You are ${currency(diff)} higher.`;
+    return `You are ${currency(Math.abs(diff))} lower.`;
+  }, [lowestTrustedCompetitor, selected]);
 
   useEffect(() => {
     if (!rows.length) {
@@ -1186,9 +1214,7 @@ export function ProductsTable({
         </p>
       )}
 
-      <div
-        className={`transition-[padding] duration-300 ${selected ? "xl:pr-[460px]" : ""}`}
-      >
+      <div>
         <div className="overflow-x-auto rounded-2xl border bg-card shadow-panel">
           <table className="w-full min-w-[1100px] text-sm">
             <thead className="sticky top-0 bg-muted dark:bg-surface-raised">
@@ -1312,16 +1338,23 @@ export function ProductsTable({
           </table>
         </div>
       </div>
+      <div
+        aria-hidden={!drawerOpen}
+        onClick={() => setSelectedId(null)}
+        className={`fixed inset-0 z-30 bg-slate-950/25 transition-opacity duration-200 ${drawerOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
+      />
       <aside
-        className={`fixed inset-y-0 right-0 z-40 w-full max-w-[460px] border-l border-border bg-panel shadow-2xl transition-transform duration-300 ease-out ${selected && productForm ? "translate-x-0" : "translate-x-full pointer-events-none"}`}
+        role="dialog"
+        aria-modal="true"
+        className={`fixed right-0 top-0 z-40 h-screen w-full max-w-[470px] border-l border-border bg-panel shadow-[-14px_0_40px_rgba(15,23,42,0.25)] transition-transform duration-300 ease-out ${drawerOpen ? "translate-x-0" : "translate-x-full pointer-events-none"}`}
       >
-        <div className="h-full overflow-y-auto p-4 md:p-5">
+        <div className="flex h-full flex-col overflow-hidden">
           {selected && productForm && (
-            <Card className="border-0 shadow-none">
-              <CardContent className="space-y-5 p-0">
-                <div className="space-y-3">
+            <Card className="flex h-full flex-col border-0 shadow-none">
+              <CardContent className="flex h-full flex-col gap-4 overflow-y-auto p-4 md:p-5">
+                <div className="sticky top-0 z-10 -mx-4 -mt-4 space-y-3 border-b border-border bg-panel px-4 pb-3 pt-4 md:-mx-5 md:px-5">
                   <div className="flex items-start justify-between gap-3">
-                    <h3 className="text-lg font-semibold">
+                    <h3 className="text-base font-semibold leading-tight">
                       {selected.productName}
                     </h3>
                     <button
@@ -1331,6 +1364,15 @@ export function ProductsTable({
                     >
                       ✕
                     </button>
+                  </div>
+                  <div className="text-xs text-text-secondary">
+                    <p>
+                      <b>Margin:</b> {marginLabel(selected)}
+                    </p>
+                    <p>
+                      <b>Latest check:</b>{" "}
+                      {new Date(selected.lastCheckedAt).toLocaleString()}
+                    </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -1356,6 +1398,27 @@ export function ProductsTable({
                   Competitor prices are reference signals, not repricing
                   instructions.
                 </p>
+
+                <div className="rounded-lg border bg-card p-3 text-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+                    Price summary
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
+                    <p className="text-xs text-text-secondary">Bents price</p>
+                    <p className="text-right font-semibold">
+                      {currency(selected.bentsRetailPrice)}
+                    </p>
+                    <p className="text-xs text-text-secondary">Lowest competitor</p>
+                    <p className="text-right font-semibold">
+                      {lowestTrustedCompetitor?.competitorCurrentPrice
+                        ? `${currency(lowestTrustedCompetitor.competitorCurrentPrice)} · ${lowestTrustedCompetitor.competitorName}`
+                        : "Not available"}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-xs font-medium text-sky-700 dark:text-sky-300">
+                    {priceSummaryText}
+                  </p>
+                </div>
 
                 {editMode ? (
                   <div className="grid gap-2 md:grid-cols-2">
@@ -1441,15 +1504,7 @@ export function ProductsTable({
                       />
                     </label>
                   </div>
-                ) : (
-                  <>
-                    <p>
-                      <b>Margin:</b> {marginLabel(selected)} |{" "}
-                      <b>Latest check:</b>{" "}
-                      {new Date(selected.lastCheckedAt).toLocaleString()}
-                    </p>
-                  </>
-                )}
+                ) : null}
 
                 <div className="rounded-lg border bg-panel p-3 space-y-3">
                   <p className="font-medium">
@@ -1461,7 +1516,7 @@ export function ProductsTable({
                       listings when mappings are available.
                     </p>
                   )}
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="space-y-3">
                     {sortCompetitorListings(competitorForm).map((c) => {
                       const diff = formatDiff(c);
                       const diagnostics = diagnosticsWarnings(c);
@@ -1471,28 +1526,30 @@ export function ProductsTable({
                           key={c.id}
                           className="rounded-lg border bg-card p-3 space-y-3"
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <p className="text-3xl font-bold leading-none">
-                                {competitorCardPriceLabel(c)}
-                              </p>
-                              <p
-                                className={`mt-1 text-xs font-medium ${diff.tone}`}
-                              >
-                                {diff.text}
-                              </p>
-                              <p className="text-sm text-text-secondary dark:text-text-secondary mt-1">
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="text-sm font-semibold text-slate-900 dark:text-foreground">
                                 {c.competitorName}
                               </p>
+                              <div className="text-right">
+                                <p className="text-xl font-bold leading-none">
+                                  {competitorCardPriceLabel(c)}
+                                </p>
+                                <p
+                                  className={`mt-1 text-xs font-medium ${diff.tone}`}
+                                >
+                                  {diff.text}
+                                </p>
+                              </div>
                             </div>
                             <span
-                              className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}
+                              className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}
                             >
                               {statusText(c.lastCheckStatus)}
                             </span>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 text-xs text-slate-700 dark:text-foreground">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-700 dark:text-foreground">
                             <p>
                               <b>Stock:</b> {c.competitorStockStatus}
                             </p>
@@ -1501,7 +1558,7 @@ export function ProductsTable({
                               {new Date(c.lastCheckedAt).toLocaleString()}
                             </p>
                             {c.checkErrorMessage && (
-                              <p className="col-span-2 text-amber-700 dark:text-amber-400">
+                              <p className="w-full text-amber-700 dark:text-amber-400">
                                 {c.checkErrorMessage}
                               </p>
                             )}
