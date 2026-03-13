@@ -35,6 +35,8 @@ export interface TrustedCompetitor {
   competitorName: string;
   price: number;
   listingId: string;
+  stockStatus: CompetitorListing["competitorStockStatus"];
+  productUrl: string;
 }
 
 export interface CommercialSignals {
@@ -107,7 +109,9 @@ function lowestTrustedCompetitor(row: TrackedProductRow): TrustedCompetitor | nu
   return {
     competitorName: lowest.competitorName,
     price: lowest.competitorCurrentPrice,
-    listingId: lowest.id
+    listingId: lowest.id,
+    stockStatus: lowest.competitorStockStatus,
+    productUrl: lowest.competitorProductUrl
   };
 }
 

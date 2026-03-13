@@ -18,6 +18,8 @@ export function exportProductsCsv(rows: TrackedProductRow[]): string {
     "Bents Price",
     "Lowest Price",
     "Lowest Competitor",
+    "Lowest Competitor Stock",
+    "Lowest Competitor URL",
     "Diff GBP",
     "Diff %"
   ];
@@ -33,6 +35,8 @@ export function exportProductsCsv(rows: TrackedProductRow[]): string {
       row.bentsRetailPrice,
       signals.lowestTrusted ? signals.lowestTrusted.price : "",
       signals.lowestTrusted ? signals.lowestTrusted.competitorName : "",
+      signals.lowestTrusted ? signals.lowestTrusted.stockStatus : "",
+      signals.lowestTrusted ? signals.lowestTrusted.productUrl : "",
       row.priceDifferenceGbp ?? "",
       row.priceDifferencePercent ?? ""
     ].map(csvEscape).join(",");
