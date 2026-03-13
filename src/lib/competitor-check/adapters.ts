@@ -1204,17 +1204,17 @@ class SquiresAdapter implements CompetitorAdapter {
       {
         selector: ".special-price .price",
         pattern:
-          /<[^>]*class=["'][^"']*\bspecial-price\b[^"']*["'][^>]*>[\s\S]{0,500}?<[^>]*class=["'][^"']*(?:^|\s)price(?:\s|$)[^"']*["'][^>]*>([\s\S]*?)<\//i
+          /<[^>]*class=["'][^"']*\bspecial-price\b[^"']*["'][^>]*>[\s\S]{0,500}?<[^>]*class=["'](?:[^"']*\s)?price(?:\s[^"']*)?["'][^>]*>([\s\S]*?)<\//i
       },
       {
         selector: ".price-container .special-price .price",
         pattern:
-          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*\bspecial-price\b[^"']*["'][^>]*>[\s\S]{0,600}?<[^>]*class=["'][^"']*(?:^|\s)price(?:\s|$)[^"']*["'][^>]*>([\s\S]*?)<\//i
+          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*\bspecial-price\b[^"']*["'][^>]*>[\s\S]{0,600}?<[^>]*class=["'](?:[^"']*\s)?price(?:\s[^"']*)?["'][^>]*>([\s\S]*?)<\//i
       },
       {
         selector: ".price-container .price",
         pattern:
-          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*(?:^|\s)price(?:\s|$)[^"']*["'][^>]*>([\s\S]*?)<\//i
+          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'](?:[^"']*\s)?price(?:\s[^"']*)?["'][^>]*>([\s\S]*?)<\//i
       }
     ];
 
