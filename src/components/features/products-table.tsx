@@ -72,8 +72,36 @@ const trustNote = (listing: CompetitorListing) => {
 
 const diagnosticsWarnings = (listing: CompetitorListing): string[] => {
   const warnings = listing.extractionMetadata?.trust_warnings;
-  if (!Array.isArray(warnings)) return [];
-  return warnings.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  const messages: string[] = Array.isArray(warnings)
+    ? warnings.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+
+  if (listing.lastCheckStatus === "failed") {
+    const parsedHostname = listing.extractionMetadata?.parsed_hostname;
+    const selectedAdapter = listing.extractionMetadata?.selected_adapter;
+    const htmlSignals = listing.extractionMetadata?.html_signals as Record<string, unknown> | undefined;
+    const htmlSnippets = listing.extractionMetadata?.html_signal_snippets as Record<string, unknown> | undefined;
+
+    if (typeof parsedHostname === "string" && parsedHostname) messages.push(`parsed_hostname=${parsedHostname}`);
+    if (typeof selectedAdapter === "string" && selectedAdapter) messages.push(`selected_adapter=${selectedAdapter}`);
+
+    if (htmlSignals && typeof htmlSignals === "object") {
+      const keys = [
+        "contains_woocommerce_price_amount",
+        "contains_product_title",
+        "contains_ast_stock_detail",
+        "contains_add_to_basket"
+      ] as const;
+      for (const key of keys) {
+        if (typeof htmlSignals[key] === "boolean") messages.push(`${key}=${String(htmlSignals[key])}`);
+      }
+    }
+
+    const snippet = htmlSnippets?.woocommerce_price_amount_snippet;
+    if (typeof snippet === "string" && snippet.trim()) messages.push(`woocommerce_price_amount_snippet=${snippet}`);
+  }
+
+  return messages;
 };
 
 const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
