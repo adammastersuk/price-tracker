@@ -20,7 +20,7 @@ export function exportProductsCsv(rows: TrackedProductRow[]): string {
     "Lowest Competitor",
     "Diff GBP",
     "Diff %",
-    "Workflow Status",
+    "Workflow",
     "Issue Summary"
   ];
 
