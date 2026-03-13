@@ -255,11 +255,13 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
 
 async function saveFailure(target: RefreshTarget, reason: string, diagnostics?: Record<string, unknown>) {
   if (!target.mappingId) return;
+  const selectedAdapter = typeof diagnostics?.selected_adapter === "string" ? diagnostics.selected_adapter : "failed";
   await updateCompetitorPrice(target.mappingId, {
     last_checked_at: new Date().toISOString(),
     last_check_status: "failed",
     check_error_message: reason,
     pricing_status: "Needs review",
+    extraction_source: `${selectedAdapter}_failed`,
     extraction_metadata: {
       trust_rejected: true,
       failure_reason: reason,
@@ -349,7 +351,19 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
     return { suspicious: saveResult.suspicious, succeeded: true };
   } catch (error) {
     const reason = (error as Error).message;
-    const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
+    const selectedAdapter = selectAdapter(target.competitorUrl);
+    const parsedHostname = (() => {
+      try {
+        return new URL(target.competitorUrl).hostname;
+      } catch {
+        return "";
+      }
+    })();
+    const diagnostics = {
+      ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
+      parsed_hostname: parsedHostname,
+      selected_adapter: selectedAdapter.name
+    };
     await saveFailure(target, reason, diagnostics);
     return { failure: { productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason }, succeeded: false };
   }
@@ -451,7 +465,19 @@ export async function processOneQueuedRefresh(runId: string): Promise<RefreshSum
       await updateRunCounts(runId, { succeeded: 1, suspicious: saveResult.suspicious ? 1 : 0, processed: 1 });
     } catch (error) {
       const reason = (error as Error).message;
-      const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
+      const selectedAdapter = selectAdapter(queued.target.competitorUrl);
+      const parsedHostname = (() => {
+        try {
+          return new URL(queued.target.competitorUrl).hostname;
+        } catch {
+          return "";
+        }
+      })();
+      const diagnostics = {
+        ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
+        parsed_hostname: parsedHostname,
+        selected_adapter: selectedAdapter.name
+      };
       failures.push({ productId: queued.target.productId, sku: queued.target.sku, competitorUrl: queued.target.competitorUrl, reason });
       await saveFailure(queued.target, reason, diagnostics);
       await updateRefreshRunItem(queued.queueItemId, {
