@@ -592,7 +592,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   return (
     <div className="space-y-4">
       <Card><CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
-        <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded border bg-slate-50 px-2 py-2">
+        <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded border bg-muted px-2 py-2">
           <Select value={activeSavedViewId} onChange={(e) => {
             const id = e.target.value;
             setActiveSavedViewId(id);
@@ -635,14 +635,14 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
       {autoAdjustMessage && <p className="text-xs text-slate-500">{autoAdjustMessage}</p>}
       <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600 dark:text-slate-300">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
       {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
-      {message && <p className="text-sm text-slate-700">{message}</p>}
-      {bulkMessage && <p className="text-sm text-slate-700">{bulkMessage}</p>}
+      {message && <p className="text-sm text-slate-700 dark:text-slate-200">{message}</p>}
+      {bulkMessage && <p className="text-sm text-slate-700 dark:text-slate-200">{bulkMessage}</p>}
 
-      <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel dark:bg-slate-900 dark:border-slate-700">
-        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50 dark:bg-slate-800"><tr className="text-left text-slate-600"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
+      <div className="overflow-x-auto rounded-2xl border bg-card shadow-panel">
+        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-muted"><tr className="text-left text-slate-600 dark:text-slate-300"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
           ["SKU", "sku"], ["Product", "product"], ["Buyer", "buyer"], ["Bents", "bents"], ["Competitor", "competitor"], ["Diff", "diff"], ["Status", "status"], ["Workflow", "workflow"]
         ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
-          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40" : ""}`} onClick={() => setSelectedId(r.id)}>
+          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`cursor-pointer border-t hover:bg-muted ${materialGap(r) ? "bg-amber-50/60 dark:bg-amber-900/20" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40 dark:bg-sky-900/20" : ""}`} onClick={() => setSelectedId(r.id)}>
             <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, r.id] : prev.filter((id) => id !== r.id))} /></td>
             <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
@@ -673,14 +673,14 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
               <p><b>Margin:</b> {marginLabel(selected)} | <b>Latest check:</b> {new Date(selected.lastCheckedAt).toLocaleString()}</p>
             </>}
 
-            <div className="rounded-lg border p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
+            <div className="rounded-lg border bg-panel p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
               {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-slate-600">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {sortCompetitorListings(competitorForm).map((c) => {
                   const diff = formatDiff(c);
                   const diagnostics = diagnosticsWarnings(c);
                   const isEditing = editingCompetitorId === c.id;
-                  return <div key={c.id} className="rounded-lg border p-3 space-y-3 bg-white dark:bg-slate-900 dark:border-slate-700">
+                  return <div key={c.id} className="rounded-lg border bg-card p-3 space-y-3">
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-3xl font-bold leading-none">{competitorCardPriceLabel(c)}</p>
@@ -718,7 +718,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
                     </div>}
 
                     <div className="flex flex-wrap gap-2">
-                      <a href={c.competitorProductUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200">View competitor page</a>
+                      <a href={c.competitorProductUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:text-slate-200 dark:hover:bg-slate-700">View competitor page</a>
                       <Button onClick={() => runRefresh(undefined, [c.id])} disabled={refreshing}>Refresh this competitor</Button>
                       {isEditing ? <>
                         <Button onClick={() => saveCompetitorEdit(c)}>Save</Button>
@@ -732,7 +732,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
             </div>
 
             <p><b>Action owner:</b> {selected.actionOwner} | <b>Internal note:</b> {selected.internalNote || "No note yet"}</p>
-            {saveMessage && <p className="text-sm text-slate-700">{saveMessage}</p>}
+            {saveMessage && <p className="text-sm text-slate-700 dark:text-slate-200">{saveMessage}</p>}
             {duplicateSku && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm">
                 <p>SKU <b>{duplicateSku.targetSku}</b> already exists on <b>{duplicateSku.targetName}</b>. Choose merge to reassign competitor listings to the existing product.</p>

@@ -39,7 +39,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="border-b bg-white/90 backdrop-blur dark:bg-slate-900/95 dark:border-slate-700">
+      <header className="border-b bg-panel/95 backdrop-blur">
         <div className="container flex h-16 items-center justify-between">
           <div>
             <p className="text-sm text-slate-500 dark:text-slate-300">Bents Garden & Home</p>
