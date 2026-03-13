@@ -16,26 +16,14 @@ export function exportProductsCsv(rows: TrackedProductRow[]): string {
     "Supplier",
     "Department",
     "Bents Price",
-    "Lowest Valid Competitor",
-    "Competitor Summary",
+    "Lowest Price",
+    "Lowest Competitor",
     "Diff GBP",
-    "Diff %",
-    "Workflow Status",
-    "Issue Summary"
+    "Diff %"
   ];
 
   const body = rows.map((row) => {
     const signals = rowCommercialSignals(row);
-    const issueSummary = [
-      signals.missingMapping ? "Missing mapping" : "",
-      signals.failedCheck ? "Failed check" : "",
-      signals.suspicious ? "Suspicious" : "",
-      signals.stale ? "Stale" : "",
-      signals.bentsNotCheapest && signals.lowestTrusted
-        ? `Gap +£${signals.gapGbp.toFixed(2)} vs ${signals.lowestTrusted.competitorName}`
-        : ""
-    ].filter(Boolean).join("; ");
-
     return [
       row.internalSku,
       row.productName,
@@ -43,12 +31,10 @@ export function exportProductsCsv(rows: TrackedProductRow[]): string {
       row.supplier,
       row.department,
       row.bentsRetailPrice,
-      signals.lowestTrusted ? `${signals.lowestTrusted.competitorName} £${signals.lowestTrusted.price.toFixed(2)}` : "",
-      row.competitorSummaryLabel,
+      signals.lowestTrusted ? signals.lowestTrusted.price : "",
+      signals.lowestTrusted ? signals.lowestTrusted.competitorName : "",
       row.priceDifferenceGbp ?? "",
-      row.priceDifferencePercent ?? "",
-      row.actionWorkflowStatus,
-      issueSummary
+      row.priceDifferencePercent ?? ""
     ].map(csvEscape).join(",");
   });
 
