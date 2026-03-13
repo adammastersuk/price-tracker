@@ -115,6 +115,11 @@ function isRuxleyManorHost(raw: string): boolean {
   return /^ruxley-?manor\.co\.uk$/i.test(normalizedHost);
 }
 
+function isScotsdalesHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)scotsdalegardencentre\.co\.uk$/i.test(normalizedHost) || /(^|\.)scotsdales\.com$/i.test(normalizedHost);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -875,6 +880,129 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
   }
 }
 
+class ScotsdalesAdapter implements CompetitorAdapter {
+  name = "scotsdales";
+
+  supports(url: string) {
+    return isScotsdalesHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Scotsdales adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      ".price-box.price-final_price .price-wrapper .price",
+      ".price-container.price-final_price .price",
+      "[data-price-type=\"finalPrice\"] .price",
+      ".price-box .price",
+      "[data-price-type=\"finalPrice\"][data-price-amount]"
+    ];
+
+    const selectorPatterns: Array<{
+      selector: string;
+      pattern: RegExp;
+      parseFrom: "text" | "attribute";
+      formatter?: (value: string) => string;
+    }> = [
+      {
+        selector: ".price-box.price-final_price .price-wrapper .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice-box\b[^"']*\bprice-final_price\b[^"']*["'][^>]*>[\s\S]{0,1200}?<[^>]*class=["'][^"']*\bprice-wrapper\b[^"']*["'][^>]*>[\s\S]{0,800}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        parseFrom: "text"
+      },
+      {
+        selector: ".price-container.price-final_price .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*\bprice-final_price\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        parseFrom: "text"
+      },
+      {
+        selector: "[data-price-type=\"finalPrice\"] .price",
+        pattern:
+          /<[^>]*data-price-type=["']finalPrice["'][^>]*>[\s\S]{0,800}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        parseFrom: "text"
+      },
+      {
+        selector: ".price-box .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice-box\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+        parseFrom: "text"
+      },
+      {
+        selector: "[data-price-type=\"finalPrice\"][data-price-amount]",
+        pattern: /<[^>]*data-price-type=["']finalPrice["'][^>]*data-price-amount=["']([^"']+)["'][^>]*>/i,
+        parseFrom: "attribute",
+        formatter: (value) => `£${value}`
+      }
+    ];
+
+    const selectorsFound: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
+
+    for (const { selector, pattern, parseFrom, formatter } of selectorPatterns) {
+      const match = html.match(pattern);
+      const captured = match?.[1] ? decodeHtmlEntities(match[1]).trim() : "";
+      selectorsFound[selector] = Boolean(captured);
+      if (!captured) continue;
+      const extractedText = formatter ? formatter(captured) : stripTags(captured);
+      const parsed = parseFrom === "attribute" ? parseCurrencyLike(captured) : parseGbpCurrency(extractedText);
+      candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
+    }
+
+    const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
+    if (!accepted?.parsed) {
+      throw new AdapterExtractionError(
+        `Scotsdales price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}`,
+        {
+          adapter_attempted: this.name,
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          accepted_value: null,
+          rejected_values: candidateValues,
+          rejection_reasons: ["required_magento_final_price_selector_missing_or_invalid"]
+        }
+      );
+    }
+
+    const stock = /\bout\s+of\s+stock\b/i.test(html)
+      ? "Out of Stock"
+      : /\bin\s+stock\b/i.test(html)
+        ? "In Stock"
+        : "Unknown";
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: null,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "scotsdales_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        adapter_attempted: this.name,
+        matched_hostname: hostFromUrl(input.competitorUrl),
+        normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: []
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -910,6 +1038,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (/charlies\.co\.uk/i.test(host)) return false;
     if (/whitehallgardencentre\.co\.uk|whitehall/i.test(host)) return false;
     if (isRuxleyManorHost(host)) return false;
+    if (isScotsdalesHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -980,6 +1109,7 @@ const adapters: CompetitorAdapter[] = [
   new GardenFurnitureWorldAdapter(),
   new GatesGardenCentreAdapter(),
   new RuxleyManorAdapter(),
+  new ScotsdalesAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
