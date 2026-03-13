@@ -116,6 +116,22 @@ const competitorCardPriceLabel = (listing: CompetitorListing) => {
   return "No price";
 };
 
+const listingPriceRank = (listing: CompetitorListing) => {
+  const price = listing.competitorCurrentPrice;
+  return price !== null && price > 0 ? price : Number.POSITIVE_INFINITY;
+};
+
+const sortCompetitorListings = (listings: CompetitorListing[]) => (
+  listings
+    .map((listing, index) => ({ listing, index }))
+    .sort((a, b) => {
+      const priceDiff = listingPriceRank(a.listing) - listingPriceRank(b.listing);
+      if (priceDiff !== 0) return priceDiff;
+      return a.index - b.index;
+    })
+    .map(({ listing }) => listing)
+);
+
 const competitorSummary = (row: TrackedProductRow) => {
   const valid = row.competitorListings.filter((c) =>
     c.competitorCurrentPrice !== null
@@ -151,13 +167,20 @@ const competitorBadges = (row: TrackedProductRow) => {
 const formatDiff = (listing: CompetitorListing) => {
   const diff = listing.priceDifferenceGbp;
   const pctDiff = listing.priceDifferencePercent;
-  if (diff === null || pctDiff === null) return { line1: "No difference available", line2: "", tone: "text-slate-600" };
-  if (Math.abs(diff) < 0.005) return { line1: "£0.00 difference", line2: "In line with Bents", tone: "text-slate-700" };
+  if (diff === null || pctDiff === null) return { text: "No difference available", tone: "text-slate-600 dark:text-slate-300" };
+  if (Math.abs(diff) < 0.005) return { text: "£0.00 difference · In line with Bents", tone: "text-slate-700 dark:text-slate-200" };
 
-  const direction = diff > 0 ? "cheaper" : "above";
-  const line1 = `${currency(Math.abs(diff))} ${direction === "cheaper" ? "cheaper than Bents" : "above Bents"}`;
-  const line2 = `${Math.abs(pctDiff).toFixed(1)}% ${direction === "cheaper" ? "below" : "above"} Bents`;
-  return { line1, line2, tone: direction === "cheaper" ? "text-emerald-700" : "text-rose-700" };
+  if (diff > 0) {
+    return {
+      text: `-${currency(Math.abs(diff))} (-${Math.abs(pctDiff).toFixed(1)}%) cheaper than Bents`,
+      tone: "text-rose-700 dark:text-rose-400"
+    };
+  }
+
+  return {
+    text: `+${currency(Math.abs(diff))} (+${Math.abs(pctDiff).toFixed(1)}%) more expensive than Bents`,
+    tone: "text-emerald-700 dark:text-emerald-400"
+  };
 };
 
 interface ConfiguredOptions { buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments?: Record<string, string[]>; }
@@ -610,16 +633,16 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
         <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...values.statuses, ...values.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} open={openFilter === "statuses"} onOpenChange={(open) => setOpenFilter(open ? "statuses" : null)} />
       </CardContent></Card>
       {autoAdjustMessage && <p className="text-xs text-slate-500">{autoAdjustMessage}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600 dark:text-slate-300">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
       {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
       {message && <p className="text-sm text-slate-700">{message}</p>}
       {bulkMessage && <p className="text-sm text-slate-700">{bulkMessage}</p>}
 
-      <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel">
-        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr className="text-left text-slate-600"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
+      <div className="overflow-x-auto rounded-2xl border bg-white shadow-panel dark:bg-slate-900 dark:border-slate-700">
+        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-slate-50 dark:bg-slate-800"><tr className="text-left text-slate-600"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
           ["SKU", "sku"], ["Product", "product"], ["Buyer", "buyer"], ["Bents", "bents"], ["Competitor", "competitor"], ["Diff", "diff"], ["Status", "status"], ["Workflow", "workflow"]
         ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
-          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40" : ""}`} onClick={() => setSelectedId(r.id)}>
+          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`border-t hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800 cursor-pointer ${materialGap(r) ? "bg-amber-50/60" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40" : ""}`} onClick={() => setSelectedId(r.id)}>
             <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, r.id] : prev.filter((id) => id !== r.id))} /></td>
             <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
@@ -653,31 +676,34 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
             <div className="rounded-lg border p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
               {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-slate-600">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {competitorForm.map((c) => {
+                {sortCompetitorListings(competitorForm).map((c) => {
                   const diff = formatDiff(c);
+                  const diagnostics = diagnosticsWarnings(c);
                   const isEditing = editingCompetitorId === c.id;
-                  return <div key={c.id} className="rounded-lg border p-3 space-y-3 bg-white">
+                  return <div key={c.id} className="rounded-lg border p-3 space-y-3 bg-white dark:bg-slate-900 dark:border-slate-700">
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-3xl font-bold leading-none">{competitorCardPriceLabel(c)}</p>
-                        <p className="text-sm text-slate-600 mt-1">{c.competitorName}</p>
+                        <p className={`mt-1 text-xs font-medium ${diff.tone}`}>{diff.text}</p>
+                        <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">{c.competitorName}</p>
                       </div>
                       <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}>{statusText(c.lastCheckStatus)}</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
-                      <p><b>Was:</b> {c.competitorWasPrice !== null ? currency(c.competitorWasPrice) : "-"}</p>
-                      <p className={c.competitorPromoPrice !== null ? "font-semibold text-amber-700" : ""}><b>Promo:</b> {c.competitorPromoPrice !== null ? currency(c.competitorPromoPrice) : "-"}</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-700 dark:text-slate-200">
                       <p><b>Stock:</b> {c.competitorStockStatus}</p>
                       <p><b>Checked:</b> {new Date(c.lastCheckedAt).toLocaleString()}</p>
-                      <p className={`col-span-2 ${diff.tone}`}><b>Diff vs Bents:</b> {diff.line1}{diff.line2 ? ` · ${diff.line2}` : ""}</p>
-                      <p className="col-span-2"><b>Source:</b> {c.extractionSource || "Unknown adapter"}</p>
-                      <p className="col-span-2 text-slate-600">{trustNote(c)}</p>
-                      <p className="col-span-2 text-xs text-slate-500">
-                        <b>Diagnostics:</b> {diagnosticsWarnings(c).length ? diagnosticsWarnings(c).join(" ") : "No diagnostics available"}
-                      </p>
-                      {c.checkErrorMessage && <p className="col-span-2 text-amber-700">{c.checkErrorMessage}</p>}
+                      {c.checkErrorMessage && <p className="col-span-2 text-amber-700 dark:text-amber-400">{c.checkErrorMessage}</p>}
                     </div>
+
+                    <details className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800/70">
+                      <summary className="cursor-pointer font-medium text-slate-600 dark:text-slate-300">Diagnostics</summary>
+                      <div className="mt-2 space-y-1 text-slate-600 dark:text-slate-300">
+                        <p><b>Source:</b> {c.extractionSource || "Unknown adapter"}</p>
+                        <p>{trustNote(c)}</p>
+                        <p><b>Diagnostics details:</b> {diagnostics.length ? diagnostics.join(" ") : "No diagnostics available"}</p>
+                      </div>
+                    </details>
 
                     {isEditing && <div className="grid gap-2 md:grid-cols-2">
                       <label className="text-xs">Competitor name<Select value={c.competitorName} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorName: e.target.value } : x))}><option value={c.competitorName}>{c.competitorName}</option>{values.competitors.filter((name) => name !== c.competitorName).map((name) => <option key={name} value={name}>{name}</option>)}</Select></label>
