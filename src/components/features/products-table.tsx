@@ -23,7 +23,7 @@ const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
   success: "bg-emerald-100 text-emerald-800",
   suspicious: "bg-amber-100 text-amber-800",
   failed: "bg-rose-100 text-rose-700",
-  pending: "bg-slate-100 text-slate-700"
+  pending: "bg-slate-100 text-slate-700 dark:bg-surface-hover/70 dark:text-slate-100"
 };
 
 const stockOptions: CompetitorStockStatus[] = ["In Stock", "Low Stock", "Out of Stock", "Unknown"];
@@ -167,8 +167,8 @@ const competitorBadges = (row: TrackedProductRow) => {
 const formatDiff = (listing: CompetitorListing) => {
   const diff = listing.priceDifferenceGbp;
   const pctDiff = listing.priceDifferencePercent;
-  if (diff === null || pctDiff === null) return { text: "No difference available", tone: "text-slate-600 dark:text-slate-300" };
-  if (Math.abs(diff) < 0.005) return { text: "£0.00 difference · In line with Bents", tone: "text-slate-700 dark:text-slate-200" };
+  if (diff === null || pctDiff === null) return { text: "No difference available", tone: "text-text-secondary dark:text-text-secondary" };
+  if (Math.abs(diff) < 0.005) return { text: "£0.00 difference · In line with Bents", tone: "text-slate-700 dark:text-foreground" };
 
   if (diff > 0) {
     return {
@@ -632,49 +632,49 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
         <MultiSelectFilter label="Competitors" allLabel="All competitors" options={values.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} open={openFilter === "competitors"} onOpenChange={(open) => setOpenFilter(open ? "competitors" : null)} />
         <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...values.statuses, ...values.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} open={openFilter === "statuses"} onOpenChange={(open) => setOpenFilter(open ? "statuses" : null)} />
       </CardContent></Card>
-      {autoAdjustMessage && <p className="text-xs text-slate-500">{autoAdjustMessage}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600 dark:text-slate-300">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
-      {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
-      {message && <p className="text-sm text-slate-700 dark:text-slate-200">{message}</p>}
-      {bulkMessage && <p className="text-sm text-slate-700 dark:text-slate-200">{bulkMessage}</p>}
+      {autoAdjustMessage && <p className="text-xs text-text-muted">{autoAdjustMessage}</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-text-secondary dark:text-text-secondary">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
+      {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 dark:text-foreground mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
+      {message && <p className="text-sm text-slate-700 dark:text-foreground">{message}</p>}
+      {bulkMessage && <p className="text-sm text-slate-700 dark:text-foreground">{bulkMessage}</p>}
 
       <div className="overflow-x-auto rounded-2xl border bg-card shadow-panel">
-        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-muted"><tr className="text-left text-slate-600 dark:text-slate-300"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
+        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-muted dark:bg-surface-raised"><tr className="text-left text-text-secondary dark:text-text-secondary"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
           ["SKU", "sku"], ["Product", "product"], ["Buyer", "buyer"], ["Bents", "bents"], ["Competitor", "competitor"], ["Diff", "diff"], ["Status", "status"], ["Workflow", "workflow"]
-        ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
-          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`cursor-pointer border-t hover:bg-muted ${materialGap(r) ? "bg-amber-50/60 dark:bg-amber-900/20" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40 dark:bg-sky-900/20" : ""}`} onClick={() => setSelectedId(r.id)}>
+        ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900 dark:text-foreground dark:hover:text-foreground" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
+          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`cursor-pointer border-t hover:bg-muted dark:hover:bg-surface-hover ${materialGap(r) ? "bg-amber-50/60 dark:bg-amber-900/25" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40 dark:ring-sky-500/40 dark:bg-sky-900/25" : ""}`} onClick={() => setSelectedId(r.id)}>
             <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, r.id] : prev.filter((id) => id !== r.id))} /></td>
             <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
             <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
             <td className="px-3 py-2">{(() => {
               const summary = competitorSummary(r);
               const badges = competitorBadges(r);
-              return <><p className="font-semibold text-slate-900">{summary.primary}</p>{summary.secondary && <p className="text-xs text-slate-600">{summary.secondary}</p>}
+              return <><p className="font-semibold text-slate-900 dark:text-foreground">{summary.primary}</p>{summary.secondary && <p className="text-xs text-text-secondary">{summary.secondary}</p>}
                 <div className="mt-1 flex flex-wrap gap-1 text-[11px]">{badges.hasLowest && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">Lowest valid</span>}
                   {badges.suspicious > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">{badges.suspicious} suspicious</span>}
                   {badges.checked > 0 && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">{badges.checked} checked</span>}</div>
-                {summary.extra && <p className="text-xs text-slate-500">{summary.extra}</p>}</>;
+                {summary.extra && <p className="text-xs text-text-muted">{summary.extra}</p>}</>;
             })()}</td>
             <td className="px-3 py-2">{r.priceDifferencePercent !== null ? pct(r.priceDifferencePercent) : "-"}</td><td className="px-3 py-2"><PricingStatusChip status={r.pricingStatus} /></td>
             <td className="px-3 py-2"><WorkflowChip status={r.actionWorkflowStatus} /></td></tr>)}</tbody>
         </table>
       </div>
-      {selected && productForm && <Card><CardContent className="space-y-5"><div className="space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-slate-600">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
+      {selected && productForm && <Card><CardContent className="space-y-5"><div className="space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-text-secondary">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
 
             {editMode ? <div className="grid gap-2 md:grid-cols-2">{[
               ["SKU", "sku"], ["Product name", "name"], ["Brand", "brand"], ["Supplier", "supplier"], ["Bents URL", "product_url"], ["Cost price", "cost_price"]
             ].map(([label, key]) => {
               const formKey = key as ProductFormTextKey;
-              return <label key={key} className="text-xs text-slate-600">{label}<Input value={productForm[formKey] ?? ""} onChange={(e) => setProductForm((prev) => prev ? { ...prev, [formKey]: e.target.value } : prev)} /></label>;
+              return <label key={key} className="text-xs text-text-secondary">{label}<Input value={productForm[formKey] ?? ""} onChange={(e) => setProductForm((prev) => prev ? { ...prev, [formKey]: e.target.value } : prev)} /></label>;
             })}
-              <label className="text-xs text-slate-600">Buyer<Select value={productForm.buyer} onChange={(e) => setProductForm((prev) => prev ? { ...prev, buyer: e.target.value } : prev)}><option value="">Unassigned</option>{values.buyers.map((buyer) => <option key={buyer} value={buyer}>{buyer}</option>)}</Select></label>
-              <label className="text-xs text-slate-600">Department<Select value={productForm.department} onChange={(e) => setProductForm((prev) => prev ? { ...prev, department: e.target.value } : prev)}><option value="">Unassigned</option>{values.departments.map((department) => <option key={department} value={department}>{department}</option>)}</Select></label>
-              <label className="text-xs text-slate-600">Bents price<Input type="number" step="0.01" value={productForm.bents_price} onChange={(e) => setProductForm((prev) => prev ? { ...prev, bents_price: Number(e.target.value) } : prev)} /></label></div> : <>
+              <label className="text-xs text-text-secondary">Buyer<Select value={productForm.buyer} onChange={(e) => setProductForm((prev) => prev ? { ...prev, buyer: e.target.value } : prev)}><option value="">Unassigned</option>{values.buyers.map((buyer) => <option key={buyer} value={buyer}>{buyer}</option>)}</Select></label>
+              <label className="text-xs text-text-secondary">Department<Select value={productForm.department} onChange={(e) => setProductForm((prev) => prev ? { ...prev, department: e.target.value } : prev)}><option value="">Unassigned</option>{values.departments.map((department) => <option key={department} value={department}>{department}</option>)}</Select></label>
+              <label className="text-xs text-text-secondary">Bents price<Input type="number" step="0.01" value={productForm.bents_price} onChange={(e) => setProductForm((prev) => prev ? { ...prev, bents_price: Number(e.target.value) } : prev)} /></label></div> : <>
               <p><b>Margin:</b> {marginLabel(selected)} | <b>Latest check:</b> {new Date(selected.lastCheckedAt).toLocaleString()}</p>
             </>}
 
             <div className="rounded-lg border bg-panel p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
-              {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-slate-600">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
+              {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-text-secondary">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {sortCompetitorListings(competitorForm).map((c) => {
                   const diff = formatDiff(c);
@@ -685,20 +685,20 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
                       <div>
                         <p className="text-3xl font-bold leading-none">{competitorCardPriceLabel(c)}</p>
                         <p className={`mt-1 text-xs font-medium ${diff.tone}`}>{diff.text}</p>
-                        <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">{c.competitorName}</p>
+                        <p className="text-sm text-text-secondary dark:text-text-secondary mt-1">{c.competitorName}</p>
                       </div>
                       <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}>{statusText(c.lastCheckStatus)}</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-700 dark:text-slate-200">
+                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-700 dark:text-foreground">
                       <p><b>Stock:</b> {c.competitorStockStatus}</p>
                       <p><b>Checked:</b> {new Date(c.lastCheckedAt).toLocaleString()}</p>
                       {c.checkErrorMessage && <p className="col-span-2 text-amber-700 dark:text-amber-400">{c.checkErrorMessage}</p>}
                     </div>
 
-                    <details className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800/70">
-                      <summary className="cursor-pointer font-medium text-slate-600 dark:text-slate-300">Diagnostics</summary>
-                      <div className="mt-2 space-y-1 text-slate-600 dark:text-slate-300">
+                    <details className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-border dark:bg-surface-raised">
+                      <summary className="cursor-pointer font-medium text-text-secondary dark:text-text-secondary">Diagnostics</summary>
+                      <div className="mt-2 space-y-1 text-text-secondary dark:text-text-secondary">
                         <p><b>Source:</b> {c.extractionSource || "Unknown adapter"}</p>
                         <p>{trustNote(c)}</p>
                         <p><b>Diagnostics details:</b> {diagnostics.length ? diagnostics.join(" ") : "No diagnostics available"}</p>
@@ -718,7 +718,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
                     </div>}
 
                     <div className="flex flex-wrap gap-2">
-                      <a href={c.competitorProductUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:text-slate-200 dark:hover:bg-slate-700">View competitor page</a>
+                      <a href={c.competitorProductUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-surface-raised dark:text-foreground dark:hover:bg-surface-hover">View competitor page</a>
                       <Button onClick={() => runRefresh(undefined, [c.id])} disabled={refreshing}>Refresh this competitor</Button>
                       {isEditing ? <>
                         <Button onClick={() => saveCompetitorEdit(c)}>Save</Button>
@@ -731,8 +731,8 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
               </div>
             </div>
 
-            <p><b>Action owner:</b> {selected.actionOwner} | <b>Internal note:</b> {selected.internalNote || "No note yet"}</p>
-            {saveMessage && <p className="text-sm text-slate-700 dark:text-slate-200">{saveMessage}</p>}
+            <p className="text-sm text-text-secondary dark:text-text-secondary"><b>Action owner:</b> {selected.actionOwner} | <b>Internal note:</b> {selected.internalNote || "No note yet"}</p>
+            {saveMessage && <p className="text-sm text-slate-700 dark:text-foreground">{saveMessage}</p>}
             {duplicateSku && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm">
                 <p>SKU <b>{duplicateSku.targetSku}</b> already exists on <b>{duplicateSku.targetName}</b>. Choose merge to reassign competitor listings to the existing product.</p>
