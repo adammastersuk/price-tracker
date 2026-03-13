@@ -783,13 +783,18 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
     for (const { selector, pattern } of selectorPatterns) {
       const match = html.match(pattern);
       const extractedText = match?.[1] ? stripTags(match[1]) : "";
-      const parsed = extractedText ? parseWooCommerceAmount(extractedText) : null;
+      let parsed = extractedText ? parseWooCommerceAmount(extractedText) : null;
+      if (parsed === null && typeof match?.index === "number") {
+        const nearbyText = stripTags(html.slice(Math.max(0, match.index - 80), Math.min(html.length, match.index + 320)));
+        parsed = parseGbpCurrency(nearbyText);
+      }
       selectorsFound[selector] = Boolean(extractedText);
-      if (extractedText) {
+      if (extractedText || parsed !== null) {
         candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
       }
     }
-    if (candidateValues.length === 0) {
+    const hasValidCandidate = () => candidateValues.some((candidate) => candidate.parsed !== null && candidate.parsed > 0);
+    if (!hasValidCandidate()) {
       const looseMatch = html.match(/<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
       const looseExtractedText = looseMatch?.[1] ? stripTags(looseMatch[1]) : "";
       if (looseExtractedText) {
@@ -801,7 +806,7 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
       }
     }
 
-    if (candidateValues.length === 0 && htmlSignals.contains_woocommerce_price_amount) {
+    if (!hasValidCandidate() && htmlSignals.contains_woocommerce_price_amount) {
       for (const match of html.matchAll(/<[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*["'][^>]*>([\s\S]{0,200}?)<\/[^>]+>/gi)) {
         const extractedText = stripTags(match[1] ?? "");
         const hasGbpSignal = /£|&pound;|GBP/i.test(match[0] ?? "") || /£|GBP/i.test(extractedText);
