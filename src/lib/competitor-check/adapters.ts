@@ -137,6 +137,13 @@ function parseWooCommerceAmount(value: string): number | null {
   return numberMatch ? parseCurrencyLike(numberMatch[0]) : null;
 }
 
+function snippetAroundFirstOccurrence(html: string, token: string, radius = 120): string | null {
+  const idx = html.toLowerCase().indexOf(token.toLowerCase());
+  if (idx < 0) return null;
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(html.length, idx + token.length + radius);
+  return html.slice(start, end).replace(/\s+/g, " ").trim();
+}
 
 function parseStockFromText(value: string): "In Stock" | "Unknown" {
   if (/\bin\s+stock\b/i.test(value)) return "In Stock";
@@ -734,6 +741,11 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
       contains_ast_stock_detail: /ast-stock-detail/i.test(html),
       contains_add_to_basket: /add\s*to\s*basket/i.test(html)
     };
+    const htmlSignalSnippets = {
+      woocommerce_price_amount_snippet: snippetAroundFirstOccurrence(html, "woocommerce-Price-amount"),
+      product_title_snippet: snippetAroundFirstOccurrence(html, "product_title"),
+      ast_stock_detail_snippet: snippetAroundFirstOccurrence(html, "ast-stock-detail")
+    };
 
     const checkedSelectors = [
       "p.price .woocommerce-Price-amount.amount",
@@ -742,7 +754,7 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
     ];
 
     const amountClassPattern =
-      '[^"\']*(?:\bwoocommerce-Price-amount\b[^"\']*\bamount\b|\bamount\b[^"\']*\bwoocommerce-Price-amount\b)[^"\']*';
+      '[^"\']*(?:\\bwoocommerce-Price-amount\\b[^"\']*\\bamount\\b|\\bamount\\b[^"\']*\\bwoocommerce-Price-amount\\b)[^"\']*';
 
     const selectorPatterns: Array<{ selector: string; pattern: RegExp }> = [
       {
@@ -777,7 +789,6 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
         candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
       }
     }
-
     if (candidateValues.length === 0) {
       const looseMatch = html.match(/<span[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
       const looseExtractedText = looseMatch?.[1] ? stripTags(looseMatch[1]) : "";
@@ -787,6 +798,21 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
           extracted_text: looseExtractedText,
           parsed: parseWooCommerceAmount(looseExtractedText)
         });
+      }
+    }
+
+    if (candidateValues.length === 0 && htmlSignals.contains_woocommerce_price_amount) {
+      for (const match of html.matchAll(/<[^>]*class=["'][^"']*\bwoocommerce-Price-amount\b[^"']*["'][^>]*>([\s\S]{0,200}?)<\/[^>]+>/gi)) {
+        const extractedText = stripTags(match[1] ?? "");
+        const hasGbpSignal = /£|&pound;|GBP/i.test(match[0] ?? "") || /£|GBP/i.test(extractedText);
+        if (!extractedText || !hasGbpSignal) continue;
+        const parsed = parseWooCommerceAmount(extractedText);
+        candidateValues.push({
+          source_selector: "woocommerce_price_amount_nearest_gbp",
+          extracted_text: extractedText,
+          parsed
+        });
+        if (parsed !== null && parsed > 0) break;
       }
     }
 
@@ -804,7 +830,8 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
           rejection_reasons: ["required_woocommerce_price_selector_missing_or_invalid"],
           parsed_hostname: hostFromUrl(input.competitorUrl),
           selected_adapter: this.name,
-          html_signals: htmlSignals
+          html_signals: htmlSignals,
+          html_signal_snippets: htmlSignalSnippets
         }
       );
     }
@@ -836,7 +863,8 @@ class GatesGardenCentreAdapter implements CompetitorAdapter {
         rejection_reasons: [],
         parsed_hostname: hostFromUrl(input.competitorUrl),
         selected_adapter: this.name,
-        html_signals: htmlSignals
+        html_signals: htmlSignals,
+        html_signal_snippets: htmlSignalSnippets
       }
     };
   }

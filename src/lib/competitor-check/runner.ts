@@ -255,11 +255,13 @@ async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<Ret
 
 async function saveFailure(target: RefreshTarget, reason: string, diagnostics?: Record<string, unknown>) {
   if (!target.mappingId) return;
+  const selectedAdapter = typeof diagnostics?.selected_adapter === "string" ? diagnostics.selected_adapter : "failed";
   await updateCompetitorPrice(target.mappingId, {
     last_checked_at: new Date().toISOString(),
     last_check_status: "failed",
     check_error_message: reason,
     pricing_status: "Needs review",
+    extraction_source: `${selectedAdapter}_failed`,
     extraction_metadata: {
       trust_rejected: true,
       failure_reason: reason,
