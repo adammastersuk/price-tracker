@@ -526,10 +526,18 @@ export async function processOneQueuedRefresh(runId: string): Promise<RefreshSum
   return summary;
 }
 
+export async function processQueuedRefreshRun(runId: string): Promise<RefreshSummary> {
+  let summary = await processOneQueuedRefresh(runId);
+  while ((summary.pending ?? 0) > 0) {
+    summary = await processOneQueuedRefresh(runId);
+  }
+  return summary;
+}
+
 export async function runCompetitorRefresh(options: RefreshOptions = {}): Promise<RefreshSummary> {
   const queued = await enqueueCompetitorRefresh(options);
   if (!queued.runId) {
     return { total: queued.total, processed: 0, succeeded: 0, failed: 0, suspicious: 0, failures: [] };
   }
-  return processOneQueuedRefresh(queued.runId);
+  return processQueuedRefreshRun(queued.runId);
 }
