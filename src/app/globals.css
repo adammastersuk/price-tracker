@@ -19,17 +19,17 @@
 
 .dark {
   color-scheme: dark;
-  --background: 222 47% 12%;
-  --foreground: 217 78% 95%;
-  --panel: 218 39% 15%;
-  --card: 216 37% 17%;
-  --muted: 218 36% 21%;
-  --surface-raised: 218 36% 21%;
-  --surface-hover: 218 33% 24%;
-  --border: 218 33% 28%;
+  --background: 217 33% 17%;
+  --foreground: 210 40% 96%;
+  --panel: 217 33% 21%;
+  --card: 217 31% 25%;
+  --muted: 217 31% 25%;
+  --surface-raised: 217 32% 30%;
+  --surface-hover: 217 32% 30%;
+  --border: 215 19% 35%;
   --ring: 217 62% 74%;
-  --text-secondary: 217 54% 80%;
-  --text-muted: 219 37% 67%;
+  --text-secondary: 213 27% 84%;
+  --text-muted: 215 20% 65%;
 }
 
 body { @apply bg-background text-foreground antialiased; }
