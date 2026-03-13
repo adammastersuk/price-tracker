@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Button,
@@ -580,6 +580,11 @@ export function ProductsTable({
   const [productForm, setProductForm] = useState<ProductForm | null>(null);
   const [competitorForm, setCompetitorForm] = useState<CompetitorListing[]>([]);
   const drawerOpen = Boolean(selected && productForm);
+  const lastAppliedSelectedParamRef = useRef<string | null>(null);
+
+  const closeDrawer = useCallback(() => {
+    setSelectedId(null);
+  }, []);
 
   const lowestTrustedCompetitor = useMemo(() => {
     if (!selected) return null;
@@ -611,6 +616,7 @@ export function ProductsTable({
   useEffect(() => {
     if (!rows.length) {
       if (selectedId !== null) setSelectedId(null);
+      lastAppliedSelectedParamRef.current = normalizedSelectedParam;
       return;
     }
 
@@ -622,7 +628,8 @@ export function ProductsTable({
         )
       : null;
 
-    if (!selectedId) {
+    if (lastAppliedSelectedParamRef.current !== normalizedSelectedParam) {
+      lastAppliedSelectedParamRef.current = normalizedSelectedParam;
       setSelectedId(targetRow?.id ?? null);
       return;
     }
@@ -646,15 +653,17 @@ export function ProductsTable({
   }, [rows]);
 
   useEffect(() => {
+    if (!drawerOpen) return;
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setSelectedId(null);
+        closeDrawer();
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [closeDrawer, drawerOpen]);
 
   useEffect(() => {
     if (!selected) return;
@@ -1340,7 +1349,7 @@ export function ProductsTable({
       </div>
       <div
         aria-hidden={!drawerOpen}
-        onClick={() => setSelectedId(null)}
+        onClick={closeDrawer}
         className={`fixed inset-0 z-30 bg-slate-950/25 transition-opacity duration-200 ${drawerOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
       />
       <aside
@@ -1360,7 +1369,8 @@ export function ProductsTable({
                     <button
                       aria-label="Close product details"
                       className="rounded-md border border-border px-2 py-1 text-sm text-text-secondary hover:bg-muted"
-                      onClick={() => setSelectedId(null)}
+                      onClick={closeDrawer}
+                      type="button"
                     >
                       ✕
                     </button>
@@ -1374,21 +1384,25 @@ export function ProductsTable({
                       {new Date(selected.lastCheckedAt).toLocaleString()}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     <Button
                       onClick={() => runRefresh([selected.id])}
                       disabled={refreshing}
+                      className="px-2.5 py-1 text-xs"
                     >
-                      Refresh this product
+                      Refresh
                     </Button>
                     <Button
-                      className="bg-slate-700"
+                      className="bg-slate-700 px-2.5 py-1 text-xs"
                       onClick={() => setEditMode((v) => !v)}
                     >
-                      {editMode ? "Cancel edit" : "Edit product"}
+                      {editMode ? "Cancel" : "Edit"}
                     </Button>
-                    <Button className="bg-rose-700" onClick={deleteProductRow}>
-                      Delete product
+                    <Button
+                      className="bg-rose-700 px-2.5 py-1 text-xs"
+                      onClick={deleteProductRow}
+                    >
+                      Delete
                     </Button>
                   </div>
                 </div>
@@ -1516,7 +1530,7 @@ export function ProductsTable({
                       listings when mappings are available.
                     </p>
                   )}
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {sortCompetitorListings(competitorForm).map((c) => {
                       const diff = formatDiff(c);
                       const diagnostics = diagnosticsWarnings(c);
@@ -1524,32 +1538,30 @@ export function ProductsTable({
                       return (
                         <div
                           key={c.id}
-                          className="rounded-lg border bg-card p-3 space-y-3"
+                          className="rounded-lg border bg-card p-2.5 space-y-2"
                         >
-                          <div className="space-y-2">
+                          <div className="space-y-1.5">
                             <div className="flex items-start justify-between gap-3">
                               <p className="text-sm font-semibold text-slate-900 dark:text-foreground">
                                 {c.competitorName}
                               </p>
-                              <div className="text-right">
-                                <p className="text-xl font-bold leading-none">
+                              <div className="text-right space-y-1">
+                                <p className="text-lg font-bold leading-none">
                                   {competitorCardPriceLabel(c)}
                                 </p>
-                                <p
-                                  className={`mt-1 text-xs font-medium ${diff.tone}`}
+                                <span
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone[c.lastCheckStatus]}`}
                                 >
-                                  {diff.text}
-                                </p>
+                                  {statusText(c.lastCheckStatus)}
+                                </span>
                               </div>
                             </div>
-                            <span
-                              className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}
-                            >
-                              {statusText(c.lastCheckStatus)}
-                            </span>
+                            <p className={`text-xs font-medium ${diff.tone}`}>
+                              {diff.text}
+                            </p>
                           </div>
 
-                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-700 dark:text-foreground">
+                          <div className="space-y-1 text-xs text-slate-700 dark:text-foreground">
                             <p>
                               <b>Stock:</b> {c.competitorStockStatus}
                             </p>
@@ -1707,28 +1719,32 @@ export function ProductsTable({
                             </div>
                           )}
 
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-wrap gap-1.5">
                             <a
                               href={c.competitorProductUrl || "#"}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-surface-raised dark:text-foreground dark:hover:bg-surface-hover"
+                              className="inline-flex items-center rounded-md bg-muted px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-surface-raised dark:text-foreground dark:hover:bg-surface-hover"
                             >
-                              View competitor page
+                              View
                             </a>
                             <Button
                               onClick={() => runRefresh(undefined, [c.id])}
                               disabled={refreshing}
+                              className="px-2 py-1 text-xs"
                             >
-                              Refresh this competitor
+                              Refresh
                             </Button>
                             {isEditing ? (
                               <>
-                                <Button onClick={() => saveCompetitorEdit(c)}>
+                                <Button
+                                  className="px-2 py-1 text-xs"
+                                  onClick={() => saveCompetitorEdit(c)}
+                                >
                                   Save
                                 </Button>
                                 <Button
-                                  className="bg-slate-500"
+                                  className="bg-slate-500 px-2 py-1 text-xs"
                                   onClick={() => {
                                     setEditingCompetitorId(null);
                                     setCompetitorForm(
@@ -1741,17 +1757,17 @@ export function ProductsTable({
                               </>
                             ) : (
                               <Button
-                                className="bg-slate-700"
+                                className="bg-slate-700 px-2 py-1 text-xs"
                                 onClick={() => setEditingCompetitorId(c.id)}
                               >
-                                Edit competitor
+                                Edit
                               </Button>
                             )}
                             <Button
-                              className="bg-rose-700"
+                              className="bg-rose-700 px-2 py-1 text-xs"
                               onClick={() => deleteCompetitor(c.id)}
                             >
-                              Delete competitor
+                              Delete
                             </Button>
                           </div>
                         </div>
