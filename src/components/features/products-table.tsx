@@ -634,7 +634,7 @@ export function ProductsTable({
       return;
     }
 
-    if (!rows.some((row) => row.id === selectedId)) {
+    if (selectedId && !rows.some((row) => row.id === selectedId)) {
       setSelectedId(targetRow?.id ?? null);
     }
   }, [normalizedSelectedParam, rows, selectedId]);
