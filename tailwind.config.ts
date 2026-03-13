@@ -14,6 +14,10 @@ const config: Config = {
         panel: "hsl(var(--panel))",
         card: "hsl(var(--card))",
         muted: "hsl(var(--muted))",
+        "surface-raised": "hsl(var(--surface-raised))",
+        "surface-hover": "hsl(var(--surface-hover))",
+        "text-secondary": "hsl(var(--text-secondary))",
+        "text-muted": "hsl(var(--text-muted))",
         primary: { DEFAULT: "hsl(219 88% 50%)", foreground: "hsl(0 0% 100%)" }
       },
       boxShadow: { panel: "0 8px 24px rgba(15, 23, 42, 0.06)" }

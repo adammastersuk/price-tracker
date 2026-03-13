@@ -11,17 +11,25 @@
   --muted: 210 30% 96%;
   --border: 220 13% 91%;
   --ring: 215 20% 35%;
+  --text-secondary: 215 25% 35%;
+  --text-muted: 215 16% 46%;
+  --surface-raised: 0 0% 100%;
+  --surface-hover: 210 30% 94%;
 }
 
 .dark {
   color-scheme: dark;
-  --background: 222 47% 11%;
-  --foreground: 210 40% 96%;
-  --panel: 217 33% 17%;
-  --card: 215 28% 17%;
-  --muted: 217 33% 20%;
-  --border: 215 19% 27%;
-  --ring: 217 91% 60%;
+  --background: 222 47% 12%;
+  --foreground: 217 78% 95%;
+  --panel: 218 39% 15%;
+  --card: 216 37% 17%;
+  --muted: 218 36% 21%;
+  --surface-raised: 218 36% 21%;
+  --surface-hover: 218 33% 24%;
+  --border: 218 33% 28%;
+  --ring: 217 62% 74%;
+  --text-secondary: 217 54% 80%;
+  --text-muted: 219 37% 67%;
 }
 
 body { @apply bg-background text-foreground antialiased; }

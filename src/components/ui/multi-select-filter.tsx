@@ -53,13 +53,13 @@ export function MultiSelectFilter({ label, options, selected, onChange, allLabel
 
   return (
     <div ref={rootRef} className="relative">
-      <Button type="button" className="h-10 w-full justify-between border bg-card text-left text-foreground" onClick={() => setOpen(!open)}>
+      <Button type="button" className="h-10 w-full justify-between border bg-card text-left text-foreground dark:border-border dark:bg-surface-raised" onClick={() => setOpen(!open)}>
         <span className="truncate">{summarize(label, allLabel, selected)}</span>
-        <span className="text-xs text-slate-500 dark:text-slate-400">▾</span>
+        <span className="text-xs text-text-muted dark:text-text-muted">▾</span>
       </Button>
       {open ? (
-        <div className="absolute z-20 mt-1 w-full min-w-[260px] rounded-lg border bg-panel p-3 shadow-xl">
-          <div className="mb-2 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+        <div className="absolute z-20 mt-1 w-full min-w-[260px] rounded-lg border bg-panel p-3 shadow-xl dark:border-border dark:bg-card">
+          <div className="mb-2 flex items-center justify-between text-xs text-text-secondary dark:text-text-secondary">
             <button type="button" className="underline" onClick={() => onChange(options)}>Select all</button>
             <button type="button" className="underline" onClick={() => onChange([])}>Clear all</button>
           </div>
@@ -71,10 +71,10 @@ export function MultiSelectFilter({ label, options, selected, onChange, allLabel
                 <span className="truncate">{option}</span>
               </label>
             ))}
-            {visibleOptions.length === 0 ? <p className="text-xs text-slate-500 dark:text-slate-400">No options match.</p> : null}
+            {visibleOptions.length === 0 ? <p className="text-xs text-text-muted dark:text-text-muted">No options match.</p> : null}
           </div>
           <div className="mt-2 text-right">
-            <button type="button" className="text-xs text-slate-600 underline dark:text-slate-300" onClick={() => setOpen(false)}>Close</button>
+            <button type="button" className="text-xs text-text-secondary underline dark:text-text-secondary" onClick={() => setOpen(false)}>Close</button>
           </div>
         </div>
       ) : null}
