@@ -120,6 +120,11 @@ function isScotsdalesHost(raw: string): boolean {
   return /(^|\.)scotsdalegardencentre\.co\.uk$/i.test(normalizedHost) || /(^|\.)scotsdales\.com$/i.test(normalizedHost);
 }
 
+function isWebbsHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)webbsdirect\.co\.uk$/i.test(normalizedHost);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -1003,6 +1008,171 @@ class ScotsdalesAdapter implements CompetitorAdapter {
   }
 }
 
+class WebbsAdapter implements CompetitorAdapter {
+  name = "webbs";
+
+  supports(url: string) {
+    return isWebbsHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Webbs adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      'span[data-bind*="text: price"]',
+      ".f-xxlarge.f-color1",
+      '[data-bind*="pricedisplay"]',
+      "#pp_flex[data-pp-amount]"
+    ];
+
+    const selectorPatterns: Array<{ selector: string; pattern: RegExp }> = [
+      {
+        selector: 'span[data-bind*="text: price"]',
+        pattern: /<span[^>]*data-bind=["'][^"']*text:\s*price[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
+      },
+      {
+        selector: ".f-xxlarge.f-color1",
+        pattern:
+          /<span[^>]*class=["'][^"']*\bf-xxlarge\b[^"']*\bf-color1\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
+      },
+      {
+        selector: '[data-bind*="pricedisplay"]',
+        pattern: /<span[^>]*data-bind=["'][^"']*pricedisplay[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
+      }
+    ];
+
+    const selectorsFound: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null; priority: number }> = [];
+
+    selectorPatterns.forEach(({ selector, pattern }, priority) => {
+      let foundForSelector = false;
+      for (const match of html.matchAll(pattern)) {
+        const fragment = match[0] ?? "";
+        const extractedText = stripTags(match[1] ?? "");
+        const parsed = parseGbpCurrency(extractedText);
+        if (!extractedText) continue;
+        if (/\b(?:was|rrp|old price|save)\b/i.test(fragment)) continue;
+        if (/\b(?:display\s*:\s*none|visibility\s*:\s*hidden|hidden\b|aria-hidden\s*=\s*["']true["'])/i.test(fragment)) continue;
+        foundForSelector = true;
+        candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed, priority });
+      }
+      selectorsFound[selector] = foundForSelector;
+    });
+
+    const accepted =
+      candidateValues
+        .filter((candidate) => candidate.parsed !== null && candidate.parsed > 0)
+        .sort((a, b) => a.priority - b.priority)[0] ?? null;
+
+    if (!accepted || accepted.parsed === null) {
+      const ppAmountMatch = html.match(/<[^>]*\bid=["']pp_flex["'][^>]*\bdata-pp-amount=["']([\d.]{1,12})["'][^>]*>/i);
+      const ppFallbackText = ppAmountMatch?.[1] ? `£${ppAmountMatch[1]}` : "";
+      const ppFallbackParsed = ppAmountMatch?.[1] ? parseCurrencyLike(ppAmountMatch[1]) : null;
+      selectorsFound["#pp_flex[data-pp-amount]"] = Boolean(ppAmountMatch?.[1]);
+      if (ppFallbackText) {
+        candidateValues.push({
+          source_selector: "#pp_flex[data-pp-amount]",
+          extracted_text: ppFallbackText,
+          parsed: ppFallbackParsed,
+          priority: checkedSelectors.length - 1
+        });
+      }
+
+      const fallbackAccepted = ppFallbackParsed && ppFallbackParsed > 0
+        ? {
+            source_selector: "#pp_flex[data-pp-amount]",
+            extracted_text: ppFallbackText,
+            parsed: ppFallbackParsed
+          }
+        : null;
+
+      if (!fallbackAccepted || fallbackAccepted.parsed === null) {
+        throw new AdapterExtractionError(
+          `Webbs price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}. Candidate values: ${candidateValues.map((candidate) => `${candidate.source_selector}=${candidate.extracted_text}`).join(" | ") || "none"}`,
+          {
+            adapter_attempted: this.name,
+            selectors_checked: checkedSelectors,
+            selectors_found: selectorsFound,
+            candidate_values_found: candidateValues,
+            accepted_value: null,
+            rejected_values: candidateValues,
+            rejection_reasons: ["required_webbs_price_selector_missing_or_invalid"]
+          }
+        );
+      }
+
+      return {
+        competitor_current_price: fallbackAccepted.parsed,
+        competitor_promo_price: null,
+        competitor_was_price: null,
+        competitor_stock_status: /\bout\s+of\s+stock\b/i.test(html)
+          ? "Out of Stock"
+          : /\blimited\s+stock\b/i.test(html)
+            ? "Limited Stock"
+            : /\bin\s+stock\b/i.test(html)
+              ? "In Stock"
+              : "Unknown",
+        match_confidence: "Medium",
+        raw_price_text: fallbackAccepted.extracted_text,
+        extraction_source: "webbs_paypal_fallback",
+        metadata: {
+          extraction_method: "deterministic_selector_fallback",
+          extracted_text: fallbackAccepted.extracted_text,
+          source_selector: fallbackAccepted.source_selector,
+          adapter_attempted: this.name,
+          matched_hostname: hostFromUrl(input.competitorUrl),
+          normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          accepted_value: fallbackAccepted.parsed,
+          rejected_values: candidateValues.filter((candidate) => candidate.source_selector !== fallbackAccepted.source_selector),
+          rejection_reasons: []
+        }
+      };
+    }
+
+    selectorsFound["#pp_flex[data-pp-amount]"] = false;
+    const stock = /\bout\s+of\s+stock\b/i.test(html)
+      ? "Out of Stock"
+      : /\blimited\s+stock\b/i.test(html)
+        ? "Limited Stock"
+        : /\bin\s+stock\b/i.test(html)
+          ? "In Stock"
+          : "Unknown";
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: null,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "webbs_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        adapter_attempted: this.name,
+        matched_hostname: hostFromUrl(input.competitorUrl),
+        normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: []
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -1039,6 +1209,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (/whitehallgardencentre\.co\.uk|whitehall/i.test(host)) return false;
     if (isRuxleyManorHost(host)) return false;
     if (isScotsdalesHost(host)) return false;
+    if (isWebbsHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -1110,6 +1281,7 @@ const adapters: CompetitorAdapter[] = [
   new GatesGardenCentreAdapter(),
   new RuxleyManorAdapter(),
   new ScotsdalesAdapter(),
+  new WebbsAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
