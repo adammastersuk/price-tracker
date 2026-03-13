@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { enqueueCompetitorRefresh, processOneQueuedRefresh, runCompetitorRefreshInline } from "@/lib/competitor-check/runner";
+import { enqueueCompetitorRefresh, processOneQueuedRefresh, processQueuedRefreshRun, runCompetitorRefreshInline } from "@/lib/competitor-check/runner";
 import { safeParseJson } from "@/lib/json";
 
 export async function POST(request: NextRequest) {
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ data: summary });
     }
 
-    const summary = await processOneQueuedRefresh(queued.runId);
+    const summary = await processQueuedRefreshRun(queued.runId);
     return NextResponse.json({ data: summary });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown refresh error";
