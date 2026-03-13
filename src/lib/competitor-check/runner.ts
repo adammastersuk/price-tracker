@@ -349,7 +349,19 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
     return { suspicious: saveResult.suspicious, succeeded: true };
   } catch (error) {
     const reason = (error as Error).message;
-    const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
+    const selectedAdapter = selectAdapter(target.competitorUrl);
+    const parsedHostname = (() => {
+      try {
+        return new URL(target.competitorUrl).hostname;
+      } catch {
+        return "";
+      }
+    })();
+    const diagnostics = {
+      ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
+      parsed_hostname: parsedHostname,
+      selected_adapter: selectedAdapter.name
+    };
     await saveFailure(target, reason, diagnostics);
     return { failure: { productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason }, succeeded: false };
   }
@@ -451,7 +463,19 @@ export async function processOneQueuedRefresh(runId: string): Promise<RefreshSum
       await updateRunCounts(runId, { succeeded: 1, suspicious: saveResult.suspicious ? 1 : 0, processed: 1 });
     } catch (error) {
       const reason = (error as Error).message;
-      const diagnostics = error instanceof AdapterExtractionError ? error.diagnostics : undefined;
+      const selectedAdapter = selectAdapter(queued.target.competitorUrl);
+      const parsedHostname = (() => {
+        try {
+          return new URL(queued.target.competitorUrl).hostname;
+        } catch {
+          return "";
+        }
+      })();
+      const diagnostics = {
+        ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
+        parsed_hostname: parsedHostname,
+        selected_adapter: selectedAdapter.name
+      };
       failures.push({ productId: queued.target.productId, sku: queued.target.sku, competitorUrl: queued.target.competitorUrl, reason });
       await saveFailure(queued.target, reason, diagnostics);
       await updateRefreshRunItem(queued.queueItemId, {
