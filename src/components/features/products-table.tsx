@@ -1,33 +1,103 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Button, Card, CardContent, Input, Select } from "@/components/ui/primitives";
+import {
+  Button,
+  Card,
+  CardContent,
+  Input,
+  Select,
+} from "@/components/ui/primitives";
 import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
-import { PricingStatusChip, WorkflowChip } from "@/components/features/status-chip";
-import { defaultFilters, queryProducts, uniqueValues } from "@/lib/data-service";
+import {
+  PricingStatusChip,
+  WorkflowChip,
+} from "@/components/features/status-chip";
+import {
+  defaultFilters,
+  queryProducts,
+  uniqueValues,
+} from "@/lib/data-service";
 import { exportProductsCsv } from "@/lib/csv";
 import { currency, pct } from "@/lib/utils";
 import { materialGap } from "@/lib/pricing-logic";
-import { CompetitorListing, CompetitorStockStatus, TrackedProductRow } from "@/types/pricing";
+import {
+  CompetitorListing,
+  CompetitorStockStatus,
+  TrackedProductRow,
+} from "@/types/pricing";
 import { safeReadJsonResponse } from "@/lib/json";
 
-interface RefreshSummary { succeeded: number; failed: number; suspicious: number; }
-interface ProductForm { sku: string; name: string; brand: string; buyer: string; supplier: string; department: string; bents_price: number; cost_price: string; product_url: string; }
-interface DuplicateSkuInfo { sourceProductId: string; targetProductId: string; targetSku: string; targetName: string; }
-interface MergeSummary { movedCompetitorCount: number; skippedDuplicateCompetitorCount: number; movedNotesCount: number; movedHistoryCount: number; sourceDeleted: boolean; }
-type ProductFormTextKey = "sku" | "name" | "brand" | "buyer" | "supplier" | "department" | "product_url" | "cost_price";
-type SortKey = "sku" | "product" | "buyer" | "bents" | "competitor" | "diff" | "status" | "workflow";
+interface RefreshSummary {
+  succeeded: number;
+  failed: number;
+  suspicious: number;
+}
+interface ProductForm {
+  sku: string;
+  name: string;
+  brand: string;
+  buyer: string;
+  supplier: string;
+  department: string;
+  bents_price: number;
+  cost_price: string;
+  product_url: string;
+}
+interface DuplicateSkuInfo {
+  sourceProductId: string;
+  targetProductId: string;
+  targetSku: string;
+  targetName: string;
+}
+interface MergeSummary {
+  movedCompetitorCount: number;
+  skippedDuplicateCompetitorCount: number;
+  movedNotesCount: number;
+  movedHistoryCount: number;
+  sourceDeleted: boolean;
+}
+type ProductFormTextKey =
+  | "sku"
+  | "name"
+  | "brand"
+  | "buyer"
+  | "supplier"
+  | "department"
+  | "product_url"
+  | "cost_price";
+type SortKey =
+  | "sku"
+  | "product"
+  | "buyer"
+  | "bents"
+  | "competitor"
+  | "diff"
+  | "status"
+  | "workflow";
 type SortDirection = "asc" | "desc";
 
 const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
   success: "bg-emerald-100 text-emerald-800",
   suspicious: "bg-amber-100 text-amber-800",
   failed: "bg-rose-100 text-rose-700",
-  pending: "bg-slate-100 text-slate-700 dark:bg-surface-hover/70 dark:text-slate-100"
+  pending:
+    "bg-slate-100 text-slate-700 dark:bg-surface-hover/70 dark:text-slate-100",
 };
 
-const stockOptions: CompetitorStockStatus[] = ["In Stock", "Low Stock", "Out of Stock", "Unknown"];
-const workflowOptions = ["Open", "Monitoring", "Reviewed", "No Action", "Closed"] as const;
+const stockOptions: CompetitorStockStatus[] = [
+  "In Stock",
+  "Low Stock",
+  "Out of Stock",
+  "Unknown",
+];
+const workflowOptions = [
+  "Open",
+  "Monitoring",
+  "Reviewed",
+  "No Action",
+  "Closed",
+] as const;
 
 interface SavedViewState {
   search: string;
@@ -40,16 +110,79 @@ interface SavedViewState {
   sortDirection: "asc" | "desc";
 }
 
-interface SavedView { id: string; name: string; state: SavedViewState; }
+interface SavedView {
+  id: string;
+  name: string;
+  state: SavedViewState;
+}
 
 const starterViews: Array<{ name: string; state: SavedViewState }> = [
-  { name: "Needs review", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Needs review"], sortKey: "status", sortDirection: "desc" } },
-  { name: "Bents not cheapest", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Higher than competitor"], sortKey: "diff", sortDirection: "desc" } },
-  { name: "Promo discrepancies", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Promo discrepancy"], sortKey: "status", sortDirection: "desc" } },
-  { name: "Suspicious extractions", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: ["Needs review"], sortKey: "status", sortDirection: "desc" } },
-  { name: "Stale checks", state: { search: "", buyers: [], departments: [], suppliers: [], competitors: [], statuses: [], sortKey: "status", sortDirection: "desc" } }
+  {
+    name: "Needs review",
+    state: {
+      search: "",
+      buyers: [],
+      departments: [],
+      suppliers: [],
+      competitors: [],
+      statuses: ["Needs review"],
+      sortKey: "status",
+      sortDirection: "desc",
+    },
+  },
+  {
+    name: "Bents not cheapest",
+    state: {
+      search: "",
+      buyers: [],
+      departments: [],
+      suppliers: [],
+      competitors: [],
+      statuses: ["Higher than competitor"],
+      sortKey: "diff",
+      sortDirection: "desc",
+    },
+  },
+  {
+    name: "Promo discrepancies",
+    state: {
+      search: "",
+      buyers: [],
+      departments: [],
+      suppliers: [],
+      competitors: [],
+      statuses: ["Promo discrepancy"],
+      sortKey: "status",
+      sortDirection: "desc",
+    },
+  },
+  {
+    name: "Suspicious extractions",
+    state: {
+      search: "",
+      buyers: [],
+      departments: [],
+      suppliers: [],
+      competitors: [],
+      statuses: ["Needs review"],
+      sortKey: "status",
+      sortDirection: "desc",
+    },
+  },
+  {
+    name: "Stale checks",
+    state: {
+      search: "",
+      buyers: [],
+      departments: [],
+      suppliers: [],
+      competitors: [],
+      statuses: [],
+      sortKey: "status",
+      sortDirection: "desc",
+    },
+  },
 ];
-
 
 const statusText = (status: CompetitorListing["lastCheckStatus"]) => {
   if (status === "success") return "Success";
@@ -60,55 +193,71 @@ const statusText = (status: CompetitorListing["lastCheckStatus"]) => {
 
 const trustNote = (listing: CompetitorListing) => {
   if (listing.lastCheckStatus === "suspicious") {
-    const retained = listing.checkErrorMessage.toLowerCase().includes("retained");
+    const retained = listing.checkErrorMessage
+      .toLowerCase()
+      .includes("retained");
     return retained
       ? "Price candidate rejected and previous valid value retained for review."
       : "Extractor flagged this result as suspicious. Review before acting.";
   }
-  if (listing.lastCheckStatus === "failed") return "Latest extraction failed. Last known values may be stale.";
-  if (listing.lastCheckStatus === "pending") return "Awaiting extraction check.";
+  if (listing.lastCheckStatus === "failed")
+    return "Latest extraction failed. Last known values may be stale.";
+  if (listing.lastCheckStatus === "pending")
+    return "Awaiting extraction check.";
   return "Price extracted successfully.";
 };
 
 const diagnosticsWarnings = (listing: CompetitorListing): string[] => {
   const warnings = listing.extractionMetadata?.trust_warnings;
   const messages: string[] = Array.isArray(warnings)
-    ? warnings.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    ? warnings.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
     : [];
 
   if (listing.lastCheckStatus === "failed") {
     const parsedHostname = listing.extractionMetadata?.parsed_hostname;
     const selectedAdapter = listing.extractionMetadata?.selected_adapter;
-    const htmlSignals = listing.extractionMetadata?.html_signals as Record<string, unknown> | undefined;
-    const htmlSnippets = listing.extractionMetadata?.html_signal_snippets as Record<string, unknown> | undefined;
+    const htmlSignals = listing.extractionMetadata?.html_signals as
+      | Record<string, unknown>
+      | undefined;
+    const htmlSnippets = listing.extractionMetadata?.html_signal_snippets as
+      | Record<string, unknown>
+      | undefined;
 
-    if (typeof parsedHostname === "string" && parsedHostname) messages.push(`parsed_hostname=${parsedHostname}`);
-    if (typeof selectedAdapter === "string" && selectedAdapter) messages.push(`selected_adapter=${selectedAdapter}`);
+    if (typeof parsedHostname === "string" && parsedHostname)
+      messages.push(`parsed_hostname=${parsedHostname}`);
+    if (typeof selectedAdapter === "string" && selectedAdapter)
+      messages.push(`selected_adapter=${selectedAdapter}`);
 
     if (htmlSignals && typeof htmlSignals === "object") {
       const keys = [
         "contains_woocommerce_price_amount",
         "contains_product_title",
         "contains_ast_stock_detail",
-        "contains_add_to_basket"
+        "contains_add_to_basket",
       ] as const;
       for (const key of keys) {
-        if (typeof htmlSignals[key] === "boolean") messages.push(`${key}=${String(htmlSignals[key])}`);
+        if (typeof htmlSignals[key] === "boolean")
+          messages.push(`${key}=${String(htmlSignals[key])}`);
       }
     }
 
     const snippet = htmlSnippets?.woocommerce_price_amount_snippet;
-    if (typeof snippet === "string" && snippet.trim()) messages.push(`woocommerce_price_amount_snippet=${snippet}`);
+    if (typeof snippet === "string" && snippet.trim())
+      messages.push(`woocommerce_price_amount_snippet=${snippet}`);
   }
 
   return messages;
 };
 
-const marginLabel = (row: TrackedProductRow) => row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
-
+const marginLabel = (row: TrackedProductRow) =>
+  row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
 
 const competitorCardPriceLabel = (listing: CompetitorListing) => {
-  if (listing.competitorCurrentPrice !== null) return currency(listing.competitorCurrentPrice);
+  if (listing.competitorCurrentPrice !== null)
+    return currency(listing.competitorCurrentPrice);
   if (listing.lastCheckStatus === "failed") {
     const msg = listing.checkErrorMessage?.trim();
     if (msg) return msg;
@@ -121,72 +270,118 @@ const listingPriceRank = (listing: CompetitorListing) => {
   return price !== null && price > 0 ? price : Number.POSITIVE_INFINITY;
 };
 
-const sortCompetitorListings = (listings: CompetitorListing[]) => (
+const sortCompetitorListings = (listings: CompetitorListing[]) =>
   listings
     .map((listing, index) => ({ listing, index }))
     .sort((a, b) => {
-      const priceDiff = listingPriceRank(a.listing) - listingPriceRank(b.listing);
+      const priceDiff =
+        listingPriceRank(a.listing) - listingPriceRank(b.listing);
       if (priceDiff !== 0) return priceDiff;
       return a.index - b.index;
     })
-    .map(({ listing }) => listing)
-);
+    .map(({ listing }) => listing);
 
 const competitorSummary = (row: TrackedProductRow) => {
-  const valid = row.competitorListings.filter((c) =>
-    c.competitorCurrentPrice !== null
-    && c.competitorCurrentPrice > 0
-    && c.lastCheckStatus === "success"
-    && c.extractionMetadata?.trust_rejected !== true
+  const valid = row.competitorListings.filter(
+    (c) =>
+      c.competitorCurrentPrice !== null &&
+      c.competitorCurrentPrice > 0 &&
+      c.lastCheckStatus === "success" &&
+      c.extractionMetadata?.trust_rejected !== true,
   );
-  const lowest = [...valid].sort((a, b) => (a.competitorCurrentPrice ?? 0) - (b.competitorCurrentPrice ?? 0))[0];
+  const lowest = [...valid].sort(
+    (a, b) => (a.competitorCurrentPrice ?? 0) - (b.competitorCurrentPrice ?? 0),
+  )[0];
   if (lowest) {
     return {
       primary: currency(lowest.competitorCurrentPrice ?? 0),
       secondary: lowest.competitorName,
-      extra: row.competitorCount > 1 ? `+${row.competitorCount - 1} more` : ""
+      extra: row.competitorCount > 1 ? `+${row.competitorCount - 1} more` : "",
     };
   }
 
-  if (row.competitorListings.some((c) => c.lastCheckStatus === "pending")) return { primary: "Pending check", secondary: "", extra: "" };
-  if (row.competitorListings.some((c) => c.lastCheckStatus === "failed")) return { primary: "Failed check", secondary: "", extra: "" };
-  return { primary: "No valid price", secondary: row.competitorName === "No competitor" ? "" : row.competitorName, extra: "" };
+  if (row.competitorListings.some((c) => c.lastCheckStatus === "pending"))
+    return { primary: "Pending check", secondary: "", extra: "" };
+  if (row.competitorListings.some((c) => c.lastCheckStatus === "failed"))
+    return { primary: "Failed check", secondary: "", extra: "" };
+  return {
+    primary: "No valid price",
+    secondary: row.competitorName === "No competitor" ? "" : row.competitorName,
+    extra: "",
+  };
 };
 
 const competitorBadges = (row: TrackedProductRow) => {
-  const suspicious = row.competitorListings.filter((c) => c.lastCheckStatus === "suspicious").length;
-  const checked = row.competitorListings.filter((c) => c.lastCheckStatus === "success").length;
-  const valid = row.competitorListings.filter((c) => c.lastCheckStatus === "success" && c.competitorCurrentPrice !== null && c.extractionMetadata?.trust_rejected !== true);
+  const suspicious = row.competitorListings.filter(
+    (c) => c.lastCheckStatus === "suspicious",
+  ).length;
+  const checked = row.competitorListings.filter(
+    (c) => c.lastCheckStatus === "success",
+  ).length;
+  const valid = row.competitorListings.filter(
+    (c) =>
+      c.lastCheckStatus === "success" &&
+      c.competitorCurrentPrice !== null &&
+      c.extractionMetadata?.trust_rejected !== true,
+  );
   return {
     hasLowest: valid.length > 0,
     suspicious,
-    checked
+    checked,
   };
 };
 
 const formatDiff = (listing: CompetitorListing) => {
   const diff = listing.priceDifferenceGbp;
   const pctDiff = listing.priceDifferencePercent;
-  if (diff === null || pctDiff === null) return { text: "No difference available", tone: "text-text-secondary dark:text-text-secondary" };
-  if (Math.abs(diff) < 0.005) return { text: "£0.00 difference · In line with Bents", tone: "text-slate-700 dark:text-foreground" };
+  if (diff === null || pctDiff === null)
+    return {
+      text: "No difference available",
+      tone: "text-text-secondary dark:text-text-secondary",
+    };
+  if (Math.abs(diff) < 0.005)
+    return {
+      text: "£0.00 difference · In line with Bents",
+      tone: "text-slate-700 dark:text-foreground",
+    };
 
   if (diff > 0) {
     return {
       text: `-${currency(Math.abs(diff))} (-${Math.abs(pctDiff).toFixed(1)}%) cheaper than Bents`,
-      tone: "text-rose-700 dark:text-rose-400"
+      tone: "text-rose-700 dark:text-rose-400",
     };
   }
 
   return {
     text: `+${currency(Math.abs(diff))} (+${Math.abs(pctDiff).toFixed(1)}%) more expensive than Bents`,
-    tone: "text-emerald-700 dark:text-emerald-400"
+    tone: "text-emerald-700 dark:text-emerald-400",
   };
 };
 
-interface ConfiguredOptions { buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments?: Record<string, string[]>; }
+interface ConfiguredOptions {
+  buyers: string[];
+  departments: string[];
+  competitors: string[];
+  buyerDepartments?: Record<string, string[]>;
+}
 
-export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredOptions, initialSelectedProductParam }: { rows: TrackedProductRow[]; onRefreshDone: () => Promise<void>; initialFilters?: Partial<typeof defaultFilters>; configuredOptions?: ConfiguredOptions; initialSelectedProductParam?: string; }) {
-  const [filters, setFilters] = useState({ ...defaultFilters, ...initialFilters });
+export function ProductsTable({
+  rows,
+  onRefreshDone,
+  initialFilters,
+  configuredOptions,
+  initialSelectedProductParam,
+}: {
+  rows: TrackedProductRow[];
+  onRefreshDone: () => Promise<void>;
+  initialFilters?: Partial<typeof defaultFilters>;
+  configuredOptions?: ConfiguredOptions;
+  initialSelectedProductParam?: string;
+}) {
+  const [filters, setFilters] = useState({
+    ...defaultFilters,
+    ...initialFilters,
+  });
   const router = useRouter();
   const pathname = usePathname();
   const [autoAdjustMessage, setAutoAdjustMessage] = useState("");
@@ -198,21 +393,31 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   const [refreshing, setRefreshing] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkOwner, setBulkOwner] = useState("");
-  const [bulkWorkflowStatus, setBulkWorkflowStatus] = useState<(typeof workflowOptions)[number]>("Open");
+  const [bulkWorkflowStatus, setBulkWorkflowStatus] =
+    useState<(typeof workflowOptions)[number]>("Open");
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
-  const [duplicateSku, setDuplicateSku] = useState<DuplicateSkuInfo | null>(null);
+  const [duplicateSku, setDuplicateSku] = useState<DuplicateSkuInfo | null>(
+    null,
+  );
   const [mergeSummary, setMergeSummary] = useState<MergeSummary | null>(null);
   const [merging, setMerging] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("sku");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [editingCompetitorId, setEditingCompetitorId] = useState<string | null>(null);
+  const [editingCompetitorId, setEditingCompetitorId] = useState<string | null>(
+    null,
+  );
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [savedViewName, setSavedViewName] = useState("");
   const [activeSavedViewId, setActiveSavedViewId] = useState<string>("");
-  const normalizedSelectedParam = (initialSelectedProductParam ?? "").trim().toLowerCase();
-  const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
+  const normalizedSelectedParam = (initialSelectedProductParam ?? "")
+    .trim()
+    .toLowerCase();
+  const filteredRows = useMemo(
+    () => queryProducts(rows, filters),
+    [rows, filters],
+  );
 
   const currentViewState = (): SavedViewState => ({
     search: filters.search,
@@ -222,7 +427,7 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     competitors: filters.competitors,
     statuses: filters.statuses,
     sortKey,
-    sortDirection
+    sortDirection,
   });
 
   const applyViewState = (state: SavedViewState) => {
@@ -232,10 +437,19 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   };
 
   const loadSavedViews = async () => {
-    const res = await fetch('/api/saved-views', { cache: 'no-store' });
+    const res = await fetch("/api/saved-views", { cache: "no-store" });
     const payload = await res.json();
     const stored = (payload.data ?? []) as SavedView[];
-    const merged = [...starterViews.filter((starter) => !stored.some((v) => v.name === starter.name)).map((v, idx) => ({ id: `starter-${idx}`, name: v.name, state: v.state })), ...stored];
+    const merged = [
+      ...starterViews
+        .filter((starter) => !stored.some((v) => v.name === starter.name))
+        .map((v, idx) => ({
+          id: `starter-${idx}`,
+          name: v.name,
+          state: v.state,
+        })),
+      ...stored,
+    ];
     setSavedViews(merged);
   };
 
@@ -245,25 +459,42 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
   const sortedRows = useMemo(() => {
     const direction = sortDirection === "asc" ? 1 : -1;
-    const nullRank = (value: number | null | undefined) => (value === null || value === undefined ? Number.POSITIVE_INFINITY : value);
+    const nullRank = (value: number | null | undefined) =>
+      value === null || value === undefined ? Number.POSITIVE_INFINITY : value;
     return [...filteredRows].sort((a, b) => {
       const aComp = competitorSummary(a);
       const bComp = competitorSummary(b);
       switch (sortKey) {
-        case "sku": return direction * a.internalSku.localeCompare(b.internalSku);
-        case "product": return direction * a.productName.localeCompare(b.productName);
-        case "buyer": return direction * a.buyer.localeCompare(b.buyer);
-        case "bents": return direction * (a.bentsRetailPrice - b.bentsRetailPrice);
+        case "sku":
+          return direction * a.internalSku.localeCompare(b.internalSku);
+        case "product":
+          return direction * a.productName.localeCompare(b.productName);
+        case "buyer":
+          return direction * a.buyer.localeCompare(b.buyer);
+        case "bents":
+          return direction * (a.bentsRetailPrice - b.bentsRetailPrice);
         case "competitor": {
           const aValue = a.competitorCurrentPrice ?? nullRank(undefined);
           const bValue = b.competitorCurrentPrice ?? nullRank(undefined);
-          if (Number.isFinite(aValue) && Number.isFinite(bValue)) return direction * (aValue - bValue);
+          if (Number.isFinite(aValue) && Number.isFinite(bValue))
+            return direction * (aValue - bValue);
           return direction * aComp.primary.localeCompare(bComp.primary);
         }
-        case "diff": return direction * ((a.priceDifferencePercent ?? nullRank(undefined)) - (b.priceDifferencePercent ?? nullRank(undefined)));
-        case "status": return direction * a.pricingStatus.localeCompare(b.pricingStatus);
-        case "workflow": return direction * a.actionWorkflowStatus.localeCompare(b.actionWorkflowStatus);
-        default: return 0;
+        case "diff":
+          return (
+            direction *
+            ((a.priceDifferencePercent ?? nullRank(undefined)) -
+              (b.priceDifferencePercent ?? nullRank(undefined)))
+          );
+        case "status":
+          return direction * a.pricingStatus.localeCompare(b.pricingStatus);
+        case "workflow":
+          return (
+            direction *
+            a.actionWorkflowStatus.localeCompare(b.actionWorkflowStatus)
+          );
+        default:
+          return 0;
       }
     });
   }, [filteredRows, sortDirection, sortKey]);
@@ -271,46 +502,81 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     const derived = uniqueValues(rows);
     return {
       ...derived,
-      buyers: configuredOptions?.buyers?.length ? configuredOptions.buyers : derived.buyers,
-      departments: configuredOptions?.departments?.length ? configuredOptions.departments : derived.departments,
-      competitors: configuredOptions?.competitors?.length ? configuredOptions.competitors : derived.competitors
+      buyers: configuredOptions?.buyers?.length
+        ? configuredOptions.buyers
+        : derived.buyers,
+      departments: configuredOptions?.departments?.length
+        ? configuredOptions.departments
+        : derived.departments,
+      competitors: configuredOptions?.competitors?.length
+        ? configuredOptions.competitors
+        : derived.competitors,
     };
   }, [rows, configuredOptions]);
   const availableDepartments = useMemo(() => {
     if (filters.buyers.length === 0) return values.departments;
     const union = new Set<string>();
-    filters.buyers.forEach((buyer) => (configuredOptions?.buyerDepartments?.[buyer] ?? []).forEach((department) => union.add(department)));
+    filters.buyers.forEach((buyer) =>
+      (configuredOptions?.buyerDepartments?.[buyer] ?? []).forEach(
+        (department) => union.add(department),
+      ),
+    );
     return values.departments.filter((department) => union.has(department));
   }, [filters.buyers, values.departments, configuredOptions?.buyerDepartments]);
 
   useEffect(() => {
     setFilters((prev) => {
-      const pruned = prev.departments.filter((department) => availableDepartments.includes(department));
+      const pruned = prev.departments.filter((department) =>
+        availableDepartments.includes(department),
+      );
       if (pruned.length === prev.departments.length) return prev;
-      setAutoAdjustMessage("Department selection updated to match selected buyers.");
+      setAutoAdjustMessage(
+        "Department selection updated to match selected buyers.",
+      );
       return { ...prev, departments: pruned };
     });
   }, [availableDepartments]);
 
-  const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? null, [rows, selectedId]);
+  const selected = useMemo(
+    () => rows.find((r) => r.id === selectedId) ?? null,
+    [rows, selectedId],
+  );
 
   useEffect(() => {
     const params = new URLSearchParams();
     if (filters.search) params.set("search", filters.search);
-    if (filters.buyers.length) params.set("buyers", filters.buyers.map(encodeURIComponent).join(","));
-    if (filters.departments.length) params.set("departments", filters.departments.map(encodeURIComponent).join(","));
-    if (filters.competitors.length) params.set("competitors", filters.competitors.map(encodeURIComponent).join(","));
-    if (filters.statuses.length) params.set("status", filters.statuses.map(encodeURIComponent).join(","));
+    if (filters.buyers.length)
+      params.set("buyers", filters.buyers.map(encodeURIComponent).join(","));
+    if (filters.departments.length)
+      params.set(
+        "departments",
+        filters.departments.map(encodeURIComponent).join(","),
+      );
+    if (filters.competitors.length)
+      params.set(
+        "competitors",
+        filters.competitors.map(encodeURIComponent).join(","),
+      );
+    if (filters.statuses.length)
+      params.set("status", filters.statuses.map(encodeURIComponent).join(","));
     if (selected) {
       params.set("productId", selected.id);
       params.set("sku", selected.internalSku);
     }
     const query = params.toString();
-    router.replace((query ? `${pathname}?${query}` : pathname) as never, { scroll: false });
+    router.replace((query ? `${pathname}?${query}` : pathname) as never, {
+      scroll: false,
+    });
   }, [filters, pathname, router, selected]);
 
-  const selectedRows = useMemo(() => rows.filter((row) => selectedIds.includes(row.id)), [rows, selectedIds]);
-  const visibleSelectedCount = useMemo(() => filteredRows.filter((row) => selectedIds.includes(row.id)).length, [filteredRows, selectedIds]);
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedIds.includes(row.id)),
+    [rows, selectedIds],
+  );
+  const visibleSelectedCount = useMemo(
+    () => filteredRows.filter((row) => selectedIds.includes(row.id)).length,
+    [filteredRows, selectedIds],
+  );
   const [productForm, setProductForm] = useState<ProductForm | null>(null);
   const [competitorForm, setCompetitorForm] = useState<CompetitorListing[]>([]);
 
@@ -321,7 +587,11 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     }
 
     const targetRow = normalizedSelectedParam
-      ? rows.find((row) => row.id.toLowerCase() === normalizedSelectedParam || row.internalSku.toLowerCase() === normalizedSelectedParam)
+      ? rows.find(
+          (row) =>
+            row.id.toLowerCase() === normalizedSelectedParam ||
+            row.internalSku.toLowerCase() === normalizedSelectedParam,
+        )
       : null;
 
     if (!selectedId) {
@@ -339,11 +609,24 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
       const valid = new Set(rows.map((row) => row.id));
       const next = prev.filter((id) => valid.has(id));
       if (next.length !== prev.length) {
-        setBulkMessage(`Selection updated: ${prev.length - next.length} row(s) are no longer available.`);
+        setBulkMessage(
+          `Selection updated: ${prev.length - next.length} row(s) are no longer available.`,
+        );
       }
       return next;
     });
   }, [rows]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedId(null);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!selected) return;
@@ -353,10 +636,11 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
       brand: selected.brand === "Unknown" ? "" : selected.brand,
       buyer: selected.buyer === "Unassigned" ? "" : selected.buyer,
       supplier: selected.supplier === "Unknown" ? "" : selected.supplier,
-      department: selected.department === "Unassigned" ? "" : selected.department,
+      department:
+        selected.department === "Unassigned" ? "" : selected.department,
       bents_price: selected.bentsRetailPrice,
       cost_price: selected.costPrice === null ? "" : String(selected.costPrice),
-      product_url: selected.bentsProductUrl
+      product_url: selected.bentsProductUrl,
     });
     setCompetitorForm(selected.competitorListings);
     setEditMode(false);
@@ -367,24 +651,36 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
   }, [selected]);
 
   const setSummaryMessage = (summary: RefreshSummary) => {
-    setMessage(`Refresh complete: ${summary.succeeded} success, ${summary.failed} failed, ${summary.suspicious} suspicious changes.`);
+    setMessage(
+      `Refresh complete: ${summary.succeeded} success, ${summary.failed} failed, ${summary.suspicious} suspicious changes.`,
+    );
   };
 
-  const runRefresh = async (productIds?: string[], competitorListingIds?: string[]) => {
+  const runRefresh = async (
+    productIds?: string[],
+    competitorListingIds?: string[],
+  ) => {
     setRefreshing(true);
     setMessage("");
     try {
       const response = await fetch("/api/competitor/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds, competitorListingIds })
+        body: JSON.stringify({ productIds, competitorListingIds }),
       });
-      const payload = await safeReadJsonResponse<{ data?: RefreshSummary; error?: string }>(response, {});
+      const payload = await safeReadJsonResponse<{
+        data?: RefreshSummary;
+        error?: string;
+      }>(response, {});
       if (!response.ok) {
-        setMessage(`Refresh failed: ${payload.error ?? "Unable to complete refresh."}`);
+        setMessage(
+          `Refresh failed: ${payload.error ?? "Unable to complete refresh."}`,
+        );
         return;
       }
-      setSummaryMessage(payload.data ?? { succeeded: 0, failed: 0, suspicious: 0 });
+      setSummaryMessage(
+        payload.data ?? { succeeded: 0, failed: 0, suspicious: 0 },
+      );
       await onRefreshDone();
     } finally {
       setRefreshing(false);
@@ -393,9 +689,14 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
   const deleteCompetitor = async (competitorId: string) => {
     if (!selected) return;
-    if (!window.confirm("Delete this competitor listing? This cannot be undone.")) return;
+    if (
+      !window.confirm("Delete this competitor listing? This cannot be undone.")
+    )
+      return;
 
-    const response = await fetch(`/api/competitor?id=${competitorId}`, { method: "DELETE" });
+    const response = await fetch(`/api/competitor?id=${competitorId}`, {
+      method: "DELETE",
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSaveMessage(payload.error ?? "Failed to delete competitor listing.");
@@ -407,10 +708,14 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
   const deleteProductRow = async () => {
     if (!selected) return;
-    const ok = window.confirm("Delete this product and all linked competitor data? This cannot be undone.");
+    const ok = window.confirm(
+      "Delete this product and all linked competitor data? This cannot be undone.",
+    );
     if (!ok) return;
 
-    const response = await fetch(`/api/products?id=${selected.id}`, { method: "DELETE" });
+    const response = await fetch(`/api/products?id=${selected.id}`, {
+      method: "DELETE",
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSaveMessage(payload.error ?? "Failed to delete product.");
@@ -442,17 +747,26 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
             supplier: productForm.supplier || null,
             department: productForm.department || null,
             bents_price: Number(productForm.bents_price),
-            cost_price: productForm.cost_price === "" ? null : Number(productForm.cost_price),
-            product_url: productForm.product_url || null
-          }
-        })
+            cost_price:
+              productForm.cost_price === ""
+                ? null
+                : Number(productForm.cost_price),
+            product_url: productForm.product_url || null,
+          },
+        }),
       });
 
       const productPayload = await productResponse.json();
       if (!productResponse.ok) {
-        if (productPayload.code === "DUPLICATE_SKU" && productPayload.duplicate) {
+        if (
+          productPayload.code === "DUPLICATE_SKU" &&
+          productPayload.duplicate
+        ) {
           setDuplicateSku(productPayload.duplicate);
-          setSaveMessage(productPayload.error ?? "That SKU already exists on another product.");
+          setSaveMessage(
+            productPayload.error ??
+              "That SKU already exists on another product.",
+          );
           return;
         }
         setSaveMessage(productPayload.error ?? "Failed to save product");
@@ -478,9 +792,9 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
           competitor_url: competitor.competitorProductUrl,
           competitor_current_price: competitor.competitorCurrentPrice,
           competitor_promo_price: competitor.competitorPromoPrice,
-          competitor_stock_status: competitor.competitorStockStatus
-        }
-      })
+          competitor_stock_status: competitor.competitorStockStatus,
+        },
+      }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -501,8 +815,8 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sourceProductId: duplicateSku.sourceProductId,
-          targetProductId: duplicateSku.targetProductId
-        })
+          targetProductId: duplicateSku.targetProductId,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -521,8 +835,13 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     }
   };
 
-  const downloadCsv = (targetRows: TrackedProductRow[], prefix = "bents-pricing-export") => {
-    const blob = new Blob([exportProductsCsv(targetRows)], { type: "text/csv;charset=utf-8;" });
+  const downloadCsv = (
+    targetRows: TrackedProductRow[],
+    prefix = "bents-pricing-export",
+  ) => {
+    const blob = new Blob([exportProductsCsv(targetRows)], {
+      type: "text/csv;charset=utf-8;",
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -531,9 +850,16 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
     URL.revokeObjectURL(url);
   };
 
-  const runBulkAction = async (action: "assign_owner" | "set_workflow_status" | "mark_reviewed") => {
+  const runBulkAction = async (
+    action: "assign_owner" | "set_workflow_status" | "mark_reviewed",
+  ) => {
     if (!selectedIds.length) return;
-    if ((action === "set_workflow_status" || action === "mark_reviewed") && !window.confirm(`Apply this ${action === "mark_reviewed" ? "reviewed shortcut" : "workflow status"} update to ${selectedIds.length} product(s)?`)) {
+    if (
+      (action === "set_workflow_status" || action === "mark_reviewed") &&
+      !window.confirm(
+        `Apply this ${action === "mark_reviewed" ? "reviewed shortcut" : "workflow status"} update to ${selectedIds.length} product(s)?`,
+      )
+    ) {
       return;
     }
 
@@ -547,15 +873,18 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
           action,
           productIds: selectedIds,
           owner: bulkOwner,
-          workflowStatus: action === "mark_reviewed" ? "Reviewed" : bulkWorkflowStatus
-        })
+          workflowStatus:
+            action === "mark_reviewed" ? "Reviewed" : bulkWorkflowStatus,
+        }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         setBulkMessage(payload.error ?? "Bulk action failed.");
         return;
       }
-      setBulkMessage(`Updated ${payload.data?.updated ?? selectedIds.length} row(s) successfully.`);
+      setBulkMessage(
+        `Updated ${payload.data?.updated ?? selectedIds.length} row(s) successfully.`,
+      );
       await onRefreshDone();
     } finally {
       setBulkBusy(false);
@@ -571,7 +900,9 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
   const toggleAllVisible = (checked: boolean) => {
     if (checked) {
-      setSelectedIds((prev) => [...new Set([...prev, ...sortedRows.map((row) => row.id)])]);
+      setSelectedIds((prev) => [
+        ...new Set([...prev, ...sortedRows.map((row) => row.id)]),
+      ]);
       return;
     }
     const visibleIds = new Set(sortedRows.map((row) => row.id));
@@ -580,174 +911,868 @@ export function ProductsTable({ rows, onRefreshDone, initialFilters, configuredO
 
   const onSort = (key: SortKey) => {
     if (sortKey === key) {
-      setSortDirection((prev) => prev === "asc" ? "desc" : "asc");
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
       return;
     }
     setSortKey(key);
     setSortDirection("asc");
   };
 
-  const sortIndicator = (key: SortKey) => sortKey === key ? (sortDirection === "asc" ? "▲" : "▼") : "↕";
+  const sortIndicator = (key: SortKey) =>
+    sortKey === key ? (sortDirection === "asc" ? "▲" : "▼") : "↕";
 
   return (
-    <div className="space-y-4">
-      <Card><CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
-        <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded border bg-muted px-2 py-2">
-          <Select value={activeSavedViewId} onChange={(e) => {
-            const id = e.target.value;
-            setActiveSavedViewId(id);
-            const view = savedViews.find((v) => v.id === id);
-            if (view) applyViewState(view.state);
-          }}>
-            <option value="">Saved views</option>
-            {savedViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
-          </Select>
-          <Input placeholder="View name" value={savedViewName} onChange={(e) => setSavedViewName(e.target.value)} className="max-w-[180px]" />
-          <Button className="bg-slate-700 px-2 py-1 text-xs" onClick={async () => {
-            if (!savedViewName.trim()) return;
-            const res = await fetch('/api/saved-views', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: savedViewName.trim(), state: currentViewState() }) });
-            if (res.ok) { setSavedViewName(''); await loadSavedViews(); }
-          }}>Save</Button>
-          <Button className="bg-slate-700 px-2 py-1 text-xs" disabled={!activeSavedViewId || activeSavedViewId.startsWith('starter-')} onClick={async () => {
-            await fetch(`/api/saved-views/${activeSavedViewId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: currentViewState() }) });
-            await loadSavedViews();
-          }}>Overwrite</Button>
-          <Button className="bg-slate-700 px-2 py-1 text-xs" disabled={!activeSavedViewId || activeSavedViewId.startsWith('starter-')} onClick={async () => {
-            if (!savedViewName.trim()) return;
-            await fetch(`/api/saved-views/${activeSavedViewId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: savedViewName.trim() }) });
-            setSavedViewName('');
-            await loadSavedViews();
-          }}>Rename</Button>
-          <Button className="bg-rose-700 px-2 py-1 text-xs" disabled={!activeSavedViewId || activeSavedViewId.startsWith('starter-')} onClick={async () => {
-            if (!window.confirm('Delete this saved view?')) return;
-            await fetch(`/api/saved-views/${activeSavedViewId}`, { method: 'DELETE' });
-            setActiveSavedViewId('');
-            await loadSavedViews();
-          }}>Delete</Button>
-        </div>
-        <Input placeholder="Search SKU or product" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} className="lg:col-span-1" />
-        <MultiSelectFilter label="Buyers" allLabel="All buyers" options={values.buyers} selected={filters.buyers} onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))} open={openFilter === "buyers"} onOpenChange={(open) => setOpenFilter(open ? "buyers" : null)} />
-        <MultiSelectFilter label="Departments" allLabel="All departments" options={availableDepartments} selected={filters.departments} onChange={(departments) => setFilters((prev) => ({ ...prev, departments }))} open={openFilter === "departments"} onOpenChange={(open) => setOpenFilter(open ? "departments" : null)} />
-        <MultiSelectFilter label="Suppliers" allLabel="All suppliers" options={values.suppliers} selected={filters.suppliers} onChange={(suppliers) => setFilters((prev) => ({ ...prev, suppliers }))} open={openFilter === "suppliers"} onOpenChange={(open) => setOpenFilter(open ? "suppliers" : null)} />
-        <MultiSelectFilter label="Competitors" allLabel="All competitors" options={values.competitors} selected={filters.competitors} onChange={(competitors) => setFilters((prev) => ({ ...prev, competitors }))} open={openFilter === "competitors"} onOpenChange={(open) => setOpenFilter(open ? "competitors" : null)} />
-        <MultiSelectFilter label="Statuses" allLabel="All statuses" options={[...new Set([...values.statuses, ...values.workflows])]} selected={filters.statuses} onChange={(statuses) => setFilters((prev) => ({ ...prev, statuses }))} open={openFilter === "statuses"} onOpenChange={(open) => setOpenFilter(open ? "statuses" : null)} />
-      </CardContent></Card>
-      {autoAdjustMessage && <p className="text-xs text-text-muted">{autoAdjustMessage}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-text-secondary dark:text-text-secondary">{sortedRows.length} products · {selectedIds.length} selected {visibleSelectedCount !== selectedIds.length ? `(visible ${visibleSelectedCount})` : ""}</p><div className="flex gap-2"><Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button><Button onClick={() => runRefresh()} disabled={refreshing}>Refresh all rows</Button></div></div>
-      {selectedIds.length > 0 && <Card><CardContent className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-slate-700 dark:text-foreground mr-2">{selectedIds.length} selected</p><Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>Refresh selected</Button><Button onClick={() => downloadCsv(selectedRows, "bents-pricing-selected")}>Export selected</Button><div className="flex items-center gap-2"><Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}><option value="">Select owner</option>{values.buyers.map((v) => <option key={v} value={v}>{v}</option>)}</Select><Input value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)} placeholder="Or type owner" className="w-40" /><Button onClick={() => runBulkAction("assign_owner")} disabled={!bulkOwner.trim() || bulkBusy}>Assign owner</Button></div><div className="flex items-center gap-2"><Select value={bulkWorkflowStatus} onChange={(e) => setBulkWorkflowStatus(e.target.value as (typeof workflowOptions)[number])}>{workflowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</Select><Button onClick={() => runBulkAction("set_workflow_status")} disabled={bulkBusy}>Set workflow status</Button><Button className="bg-emerald-700" onClick={() => runBulkAction("mark_reviewed")} disabled={bulkBusy}>Mark reviewed</Button></div><Button className="bg-slate-500" onClick={() => setSelectedIds([])} disabled={bulkBusy}>Clear selection</Button></CardContent></Card>}
-      {message && <p className="text-sm text-slate-700 dark:text-foreground">{message}</p>}
-      {bulkMessage && <p className="text-sm text-slate-700 dark:text-foreground">{bulkMessage}</p>}
-
-      <div className="overflow-x-auto rounded-2xl border bg-card shadow-panel">
-        <table className="w-full min-w-[1100px] text-sm"><thead className="sticky top-0 bg-muted dark:bg-surface-raised"><tr className="text-left text-text-secondary dark:text-text-secondary"><th className="px-3 py-2"><input type="checkbox" aria-label="Select all visible rows" checked={sortedRows.length > 0 && sortedRows.every((row) => selectedIds.includes(row.id))} onChange={(e) => toggleAllVisible(e.target.checked)} /></th>{([
-          ["SKU", "sku"], ["Product", "product"], ["Buyer", "buyer"], ["Bents", "bents"], ["Competitor", "competitor"], ["Diff", "diff"], ["Status", "status"], ["Workflow", "workflow"]
-        ] as Array<[string, SortKey]>).map(([label, key]) => <th key={key} className="px-3 py-2"><button className="inline-flex items-center gap-1 hover:text-slate-900 dark:text-foreground dark:hover:text-foreground" onClick={() => onSort(key)}>{label}<span className="text-xs">{sortIndicator(key)}</span></button></th>)}</tr></thead>
-          <tbody>{sortedRows.map((r) => <tr key={r.id} className={`cursor-pointer border-t hover:bg-muted dark:hover:bg-surface-hover ${materialGap(r) ? "bg-amber-50/60 dark:bg-amber-900/25" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40 dark:ring-sky-500/40 dark:bg-sky-900/25" : ""}`} onClick={() => setSelectedId(r.id)}>
-            <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, r.id] : prev.filter((id) => id !== r.id))} /></td>
-            <td className="px-3 py-2 font-medium">{r.internalSku}</td><td className="px-3 py-2">{r.productName}</td><td className="px-3 py-2">{r.buyer}</td>
-            <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
-            <td className="px-3 py-2">{(() => {
-              const summary = competitorSummary(r);
-              const badges = competitorBadges(r);
-              return <><p className="font-semibold text-slate-900 dark:text-foreground">{summary.primary}</p>{summary.secondary && <p className="text-xs text-text-secondary">{summary.secondary}</p>}
-                <div className="mt-1 flex flex-wrap gap-1 text-[11px]">{badges.hasLowest && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">Lowest valid</span>}
-                  {badges.suspicious > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">{badges.suspicious} suspicious</span>}
-                  {badges.checked > 0 && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">{badges.checked} checked</span>}</div>
-                {summary.extra && <p className="text-xs text-text-muted">{summary.extra}</p>}</>;
-            })()}</td>
-            <td className="px-3 py-2">{r.priceDifferencePercent !== null ? pct(r.priceDifferencePercent) : "-"}</td><td className="px-3 py-2"><PricingStatusChip status={r.pricingStatus} /></td>
-            <td className="px-3 py-2"><WorkflowChip status={r.actionWorkflowStatus} /></td></tr>)}</tbody>
-        </table>
-      </div>
-      {selected && productForm && <Card><CardContent className="space-y-5"><div className="space-y-3"><div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{selected.productName}</h3><div className="flex gap-2"><Button onClick={() => runRefresh([selected.id])} disabled={refreshing}>Refresh this product</Button><Button className="bg-slate-700" onClick={() => setEditMode((v) => !v)}>{editMode ? "Cancel edit" : "Edit product"}</Button><Button className="bg-rose-700" onClick={deleteProductRow}>Delete product</Button></div></div><p className="text-sm text-text-secondary">Decision support only: review competitor signals alongside margin, stock, supplier context and commercial judgement. Competitor prices are reference signals, not repricing instructions.</p>
-
-            {editMode ? <div className="grid gap-2 md:grid-cols-2">{[
-              ["SKU", "sku"], ["Product name", "name"], ["Brand", "brand"], ["Supplier", "supplier"], ["Bents URL", "product_url"], ["Cost price", "cost_price"]
-            ].map(([label, key]) => {
-              const formKey = key as ProductFormTextKey;
-              return <label key={key} className="text-xs text-text-secondary">{label}<Input value={productForm[formKey] ?? ""} onChange={(e) => setProductForm((prev) => prev ? { ...prev, [formKey]: e.target.value } : prev)} /></label>;
-            })}
-              <label className="text-xs text-text-secondary">Buyer<Select value={productForm.buyer} onChange={(e) => setProductForm((prev) => prev ? { ...prev, buyer: e.target.value } : prev)}><option value="">Unassigned</option>{values.buyers.map((buyer) => <option key={buyer} value={buyer}>{buyer}</option>)}</Select></label>
-              <label className="text-xs text-text-secondary">Department<Select value={productForm.department} onChange={(e) => setProductForm((prev) => prev ? { ...prev, department: e.target.value } : prev)}><option value="">Unassigned</option>{values.departments.map((department) => <option key={department} value={department}>{department}</option>)}</Select></label>
-              <label className="text-xs text-text-secondary">Bents price<Input type="number" step="0.01" value={productForm.bents_price} onChange={(e) => setProductForm((prev) => prev ? { ...prev, bents_price: Number(e.target.value) } : prev)} /></label></div> : <>
-              <p><b>Margin:</b> {marginLabel(selected)} | <b>Latest check:</b> {new Date(selected.lastCheckedAt).toLocaleString()}</p>
-            </>}
-
-            <div className="rounded-lg border bg-panel p-3 space-y-3"><p className="font-medium">Competitor comparison ({selected.competitorCount})</p>
-              {competitorForm.length === 0 && <p className="rounded border border-dashed p-4 text-sm text-text-secondary">No competitor listings yet. Keep the product and add listings when mappings are available.</p>}
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {sortCompetitorListings(competitorForm).map((c) => {
-                  const diff = formatDiff(c);
-                  const diagnostics = diagnosticsWarnings(c);
-                  const isEditing = editingCompetitorId === c.id;
-                  return <div key={c.id} className="rounded-lg border bg-card p-3 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-3xl font-bold leading-none">{competitorCardPriceLabel(c)}</p>
-                        <p className={`mt-1 text-xs font-medium ${diff.tone}`}>{diff.text}</p>
-                        <p className="text-sm text-text-secondary dark:text-text-secondary mt-1">{c.competitorName}</p>
-                      </div>
-                      <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}>{statusText(c.lastCheckStatus)}</span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-700 dark:text-foreground">
-                      <p><b>Stock:</b> {c.competitorStockStatus}</p>
-                      <p><b>Checked:</b> {new Date(c.lastCheckedAt).toLocaleString()}</p>
-                      {c.checkErrorMessage && <p className="col-span-2 text-amber-700 dark:text-amber-400">{c.checkErrorMessage}</p>}
-                    </div>
-
-                    <details className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-border dark:bg-surface-raised">
-                      <summary className="cursor-pointer font-medium text-text-secondary dark:text-text-secondary">Diagnostics</summary>
-                      <div className="mt-2 space-y-1 text-text-secondary dark:text-text-secondary">
-                        <p><b>Source:</b> {c.extractionSource || "Unknown adapter"}</p>
-                        <p>{trustNote(c)}</p>
-                        <p><b>Diagnostics details:</b> {diagnostics.length ? diagnostics.join(" ") : "No diagnostics available"}</p>
-                      </div>
-                    </details>
-
-                    {isEditing && <div className="grid gap-2 md:grid-cols-2">
-                      <label className="text-xs">Competitor name<Select value={c.competitorName} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorName: e.target.value } : x))}><option value={c.competitorName}>{c.competitorName}</option>{values.competitors.filter((name) => name !== c.competitorName).map((name) => <option key={name} value={name}>{name}</option>)}</Select></label>
-                      <label className="text-xs">Competitor URL<Input value={c.competitorProductUrl} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorProductUrl: e.target.value } : x))} /></label>
-                      <label className="text-xs">Current price<Input type="number" step="0.01" value={c.competitorCurrentPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorCurrentPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
-                      <label className="text-xs">Promo price<Input type="number" step="0.01" value={c.competitorPromoPrice ?? ""} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorPromoPrice: e.target.value === "" ? null : Number(e.target.value) } : x))} /></label>
-                      <label className="text-xs md:col-span-2">Stock status
-                        <Select value={c.competitorStockStatus} onChange={(e) => setCompetitorForm((prev) => prev.map((x) => x.id === c.id ? { ...x, competitorStockStatus: e.target.value as CompetitorStockStatus } : x))}>
-                          {stockOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                        </Select>
-                      </label>
-                    </div>}
-
-                    <div className="flex flex-wrap gap-2">
-                      <a href={c.competitorProductUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-surface-raised dark:text-foreground dark:hover:bg-surface-hover">View competitor page</a>
-                      <Button onClick={() => runRefresh(undefined, [c.id])} disabled={refreshing}>Refresh this competitor</Button>
-                      {isEditing ? <>
-                        <Button onClick={() => saveCompetitorEdit(c)}>Save</Button>
-                        <Button className="bg-slate-500" onClick={() => { setEditingCompetitorId(null); setCompetitorForm(selected.competitorListings); }}>Cancel</Button>
-                      </> : <Button className="bg-slate-700" onClick={() => setEditingCompetitorId(c.id)}>Edit competitor</Button>}
-                      <Button className="bg-rose-700" onClick={() => deleteCompetitor(c.id)}>Delete competitor</Button>
-                    </div>
-                  </div>;
-                })}
-              </div>
-            </div>
-
-            <p className="text-sm text-text-secondary dark:text-text-secondary"><b>Action owner:</b> {selected.actionOwner} | <b>Internal note:</b> {selected.internalNote || "No note yet"}</p>
-            {saveMessage && <p className="text-sm text-slate-700 dark:text-foreground">{saveMessage}</p>}
-            {duplicateSku && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm">
-                <p>SKU <b>{duplicateSku.targetSku}</b> already exists on <b>{duplicateSku.targetName}</b>. Choose merge to reassign competitor listings to the existing product.</p>
-                <div className="flex gap-2">
-                  <Button className="bg-amber-700" onClick={runMergeIntoTarget} disabled={merging}>{merging ? "Merging..." : "Merge into existing SKU"}</Button>
-                  <Button className="bg-slate-500" onClick={() => setDuplicateSku(null)} disabled={merging}>Cancel merge</Button>
-                </div>
-              </div>
-            )}
-            {mergeSummary && (
-              <p className="text-sm text-emerald-700">Merged successfully: moved {mergeSummary.movedCompetitorCount} competitor listings, skipped {mergeSummary.skippedDuplicateCompetitorCount} duplicates, moved {mergeSummary.movedNotesCount} notes and {mergeSummary.movedHistoryCount} history rows. {mergeSummary.sourceDeleted ? "Source product removed." : "Source product retained because linked records remain."}</p>
-            )}
-            {editMode && <div className="flex gap-2"><Button onClick={saveEdits} disabled={saving}>{saving ? "Saving..." : "Save changes"}</Button><Button className="bg-slate-500" onClick={() => { setEditMode(false); setProductForm(null); setCompetitorForm([]); setSelectedId(selected.id); setDuplicateSku(null); }}>Cancel</Button></div>}
+    <div className="relative space-y-4">
+      <Card>
+        <CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
+          <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded border bg-muted px-2 py-2">
+            <Select
+              value={activeSavedViewId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setActiveSavedViewId(id);
+                const view = savedViews.find((v) => v.id === id);
+                if (view) applyViewState(view.state);
+              }}
+            >
+              <option value="">Saved views</option>
+              {savedViews.map((view) => (
+                <option key={view.id} value={view.id}>
+                  {view.name}
+                </option>
+              ))}
+            </Select>
+            <Input
+              placeholder="View name"
+              value={savedViewName}
+              onChange={(e) => setSavedViewName(e.target.value)}
+              className="max-w-[180px]"
+            />
+            <Button
+              className="bg-slate-700 px-2 py-1 text-xs"
+              onClick={async () => {
+                if (!savedViewName.trim()) return;
+                const res = await fetch("/api/saved-views", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    name: savedViewName.trim(),
+                    state: currentViewState(),
+                  }),
+                });
+                if (res.ok) {
+                  setSavedViewName("");
+                  await loadSavedViews();
+                }
+              }}
+            >
+              Save
+            </Button>
+            <Button
+              className="bg-slate-700 px-2 py-1 text-xs"
+              disabled={
+                !activeSavedViewId || activeSavedViewId.startsWith("starter-")
+              }
+              onClick={async () => {
+                await fetch(`/api/saved-views/${activeSavedViewId}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ state: currentViewState() }),
+                });
+                await loadSavedViews();
+              }}
+            >
+              Overwrite
+            </Button>
+            <Button
+              className="bg-slate-700 px-2 py-1 text-xs"
+              disabled={
+                !activeSavedViewId || activeSavedViewId.startsWith("starter-")
+              }
+              onClick={async () => {
+                if (!savedViewName.trim()) return;
+                await fetch(`/api/saved-views/${activeSavedViewId}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name: savedViewName.trim() }),
+                });
+                setSavedViewName("");
+                await loadSavedViews();
+              }}
+            >
+              Rename
+            </Button>
+            <Button
+              className="bg-rose-700 px-2 py-1 text-xs"
+              disabled={
+                !activeSavedViewId || activeSavedViewId.startsWith("starter-")
+              }
+              onClick={async () => {
+                if (!window.confirm("Delete this saved view?")) return;
+                await fetch(`/api/saved-views/${activeSavedViewId}`, {
+                  method: "DELETE",
+                });
+                setActiveSavedViewId("");
+                await loadSavedViews();
+              }}
+            >
+              Delete
+            </Button>
           </div>
-      </CardContent></Card>}
+          <Input
+            placeholder="Search SKU or product"
+            value={filters.search}
+            onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            className="lg:col-span-1"
+          />
+          <MultiSelectFilter
+            label="Buyers"
+            allLabel="All buyers"
+            options={values.buyers}
+            selected={filters.buyers}
+            onChange={(buyers) => setFilters((prev) => ({ ...prev, buyers }))}
+            open={openFilter === "buyers"}
+            onOpenChange={(open) => setOpenFilter(open ? "buyers" : null)}
+          />
+          <MultiSelectFilter
+            label="Departments"
+            allLabel="All departments"
+            options={availableDepartments}
+            selected={filters.departments}
+            onChange={(departments) =>
+              setFilters((prev) => ({ ...prev, departments }))
+            }
+            open={openFilter === "departments"}
+            onOpenChange={(open) => setOpenFilter(open ? "departments" : null)}
+          />
+          <MultiSelectFilter
+            label="Suppliers"
+            allLabel="All suppliers"
+            options={values.suppliers}
+            selected={filters.suppliers}
+            onChange={(suppliers) =>
+              setFilters((prev) => ({ ...prev, suppliers }))
+            }
+            open={openFilter === "suppliers"}
+            onOpenChange={(open) => setOpenFilter(open ? "suppliers" : null)}
+          />
+          <MultiSelectFilter
+            label="Competitors"
+            allLabel="All competitors"
+            options={values.competitors}
+            selected={filters.competitors}
+            onChange={(competitors) =>
+              setFilters((prev) => ({ ...prev, competitors }))
+            }
+            open={openFilter === "competitors"}
+            onOpenChange={(open) => setOpenFilter(open ? "competitors" : null)}
+          />
+          <MultiSelectFilter
+            label="Statuses"
+            allLabel="All statuses"
+            options={[...new Set([...values.statuses, ...values.workflows])]}
+            selected={filters.statuses}
+            onChange={(statuses) =>
+              setFilters((prev) => ({ ...prev, statuses }))
+            }
+            open={openFilter === "statuses"}
+            onOpenChange={(open) => setOpenFilter(open ? "statuses" : null)}
+          />
+        </CardContent>
+      </Card>
+      {autoAdjustMessage && (
+        <p className="text-xs text-text-muted">{autoAdjustMessage}</p>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-text-secondary dark:text-text-secondary">
+          {sortedRows.length} products · {selectedIds.length} selected{" "}
+          {visibleSelectedCount !== selectedIds.length
+            ? `(visible ${visibleSelectedCount})`
+            : ""}
+        </p>
+        <div className="flex gap-2">
+          <Button onClick={() => downloadCsv(filteredRows)}>Export CSV</Button>
+          <Button onClick={() => runRefresh()} disabled={refreshing}>
+            Refresh all rows
+          </Button>
+        </div>
+      </div>
+      {selectedIds.length > 0 && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-slate-700 dark:text-foreground mr-2">
+              {selectedIds.length} selected
+            </p>
+            <Button onClick={runBulkRefresh} disabled={refreshing || bulkBusy}>
+              Refresh selected
+            </Button>
+            <Button
+              onClick={() =>
+                downloadCsv(selectedRows, "bents-pricing-selected")
+              }
+            >
+              Export selected
+            </Button>
+            <div className="flex items-center gap-2">
+              <Select
+                value={bulkOwner}
+                onChange={(e) => setBulkOwner(e.target.value)}
+              >
+                <option value="">Select owner</option>
+                {values.buyers.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                value={bulkOwner}
+                onChange={(e) => setBulkOwner(e.target.value)}
+                placeholder="Or type owner"
+                className="w-40"
+              />
+              <Button
+                onClick={() => runBulkAction("assign_owner")}
+                disabled={!bulkOwner.trim() || bulkBusy}
+              >
+                Assign owner
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Select
+                value={bulkWorkflowStatus}
+                onChange={(e) =>
+                  setBulkWorkflowStatus(
+                    e.target.value as (typeof workflowOptions)[number],
+                  )
+                }
+              >
+                {workflowOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                onClick={() => runBulkAction("set_workflow_status")}
+                disabled={bulkBusy}
+              >
+                Set workflow status
+              </Button>
+              <Button
+                className="bg-emerald-700"
+                onClick={() => runBulkAction("mark_reviewed")}
+                disabled={bulkBusy}
+              >
+                Mark reviewed
+              </Button>
+            </div>
+            <Button
+              className="bg-slate-500"
+              onClick={() => setSelectedIds([])}
+              disabled={bulkBusy}
+            >
+              Clear selection
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+      {message && (
+        <p className="text-sm text-slate-700 dark:text-foreground">{message}</p>
+      )}
+      {bulkMessage && (
+        <p className="text-sm text-slate-700 dark:text-foreground">
+          {bulkMessage}
+        </p>
+      )}
+
+      <div
+        className={`transition-[padding] duration-300 ${selected ? "xl:pr-[460px]" : ""}`}
+      >
+        <div className="overflow-x-auto rounded-2xl border bg-card shadow-panel">
+          <table className="w-full min-w-[1100px] text-sm">
+            <thead className="sticky top-0 bg-muted dark:bg-surface-raised">
+              <tr className="text-left text-text-secondary dark:text-text-secondary">
+                <th className="px-3 py-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible rows"
+                    checked={
+                      sortedRows.length > 0 &&
+                      sortedRows.every((row) => selectedIds.includes(row.id))
+                    }
+                    onChange={(e) => toggleAllVisible(e.target.checked)}
+                  />
+                </th>
+                {(
+                  [
+                    ["SKU", "sku"],
+                    ["Product", "product"],
+                    ["Buyer", "buyer"],
+                    ["Bents", "bents"],
+                    ["Competitor", "competitor"],
+                    ["Diff", "diff"],
+                    ["Status", "status"],
+                    ["Workflow", "workflow"],
+                  ] as Array<[string, SortKey]>
+                ).map(([label, key]) => (
+                  <th key={key} className="px-3 py-2">
+                    <button
+                      className="inline-flex items-center gap-1 hover:text-slate-900 dark:text-foreground dark:hover:text-foreground"
+                      onClick={() => onSort(key)}
+                    >
+                      {label}
+                      <span className="text-xs">{sortIndicator(key)}</span>
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map((r) => (
+                <tr
+                  key={r.id}
+                  className={`cursor-pointer border-t hover:bg-muted dark:hover:bg-surface-hover ${materialGap(r) ? "bg-amber-50/60 dark:bg-amber-900/25" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40 dark:ring-sky-500/40 dark:bg-sky-900/25" : ""}`}
+                  onClick={() => setSelectedId(r.id)}
+                >
+                  <td
+                    className="px-3 py-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(r.id)}
+                      onChange={(e) =>
+                        setSelectedIds((prev) =>
+                          e.target.checked
+                            ? [...prev, r.id]
+                            : prev.filter((id) => id !== r.id),
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2 font-medium">{r.internalSku}</td>
+                  <td className="px-3 py-2">{r.productName}</td>
+                  <td className="px-3 py-2">{r.buyer}</td>
+                  <td className="px-3 py-2">{currency(r.bentsRetailPrice)}</td>
+                  <td className="px-3 py-2">
+                    {(() => {
+                      const summary = competitorSummary(r);
+                      const badges = competitorBadges(r);
+                      return (
+                        <>
+                          <p className="font-semibold text-slate-900 dark:text-foreground">
+                            {summary.primary}
+                          </p>
+                          {summary.secondary && (
+                            <p className="text-xs text-text-secondary">
+                              {summary.secondary}
+                            </p>
+                          )}
+                          <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
+                            {badges.hasLowest && (
+                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">
+                                Lowest valid
+                              </span>
+                            )}
+                            {badges.suspicious > 0 && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
+                                {badges.suspicious} suspicious
+                              </span>
+                            )}
+                            {badges.checked > 0 && (
+                              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">
+                                {badges.checked} checked
+                              </span>
+                            )}
+                          </div>
+                          {summary.extra && (
+                            <p className="text-xs text-text-muted">
+                              {summary.extra}
+                            </p>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </td>
+                  <td className="px-3 py-2">
+                    {r.priceDifferencePercent !== null
+                      ? pct(r.priceDifferencePercent)
+                      : "-"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <PricingStatusChip status={r.pricingStatus} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <WorkflowChip status={r.actionWorkflowStatus} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <aside
+        className={`fixed inset-y-0 right-0 z-40 w-full max-w-[460px] border-l border-border bg-panel shadow-2xl transition-transform duration-300 ease-out ${selected && productForm ? "translate-x-0" : "translate-x-full pointer-events-none"}`}
+      >
+        <div className="h-full overflow-y-auto p-4 md:p-5">
+          {selected && productForm && (
+            <Card className="border-0 shadow-none">
+              <CardContent className="space-y-5 p-0">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-lg font-semibold">
+                      {selected.productName}
+                    </h3>
+                    <button
+                      aria-label="Close product details"
+                      className="rounded-md border border-border px-2 py-1 text-sm text-text-secondary hover:bg-muted"
+                      onClick={() => setSelectedId(null)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={() => runRefresh([selected.id])}
+                      disabled={refreshing}
+                    >
+                      Refresh this product
+                    </Button>
+                    <Button
+                      className="bg-slate-700"
+                      onClick={() => setEditMode((v) => !v)}
+                    >
+                      {editMode ? "Cancel edit" : "Edit product"}
+                    </Button>
+                    <Button className="bg-rose-700" onClick={deleteProductRow}>
+                      Delete product
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-sm text-text-secondary">
+                  Decision support only: review competitor signals alongside
+                  margin, stock, supplier context and commercial judgement.
+                  Competitor prices are reference signals, not repricing
+                  instructions.
+                </p>
+
+                {editMode ? (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {[
+                      ["SKU", "sku"],
+                      ["Product name", "name"],
+                      ["Brand", "brand"],
+                      ["Supplier", "supplier"],
+                      ["Bents URL", "product_url"],
+                      ["Cost price", "cost_price"],
+                    ].map(([label, key]) => {
+                      const formKey = key as ProductFormTextKey;
+                      return (
+                        <label
+                          key={key}
+                          className="text-xs text-text-secondary"
+                        >
+                          {label}
+                          <Input
+                            value={productForm[formKey] ?? ""}
+                            onChange={(e) =>
+                              setProductForm((prev) =>
+                                prev
+                                  ? { ...prev, [formKey]: e.target.value }
+                                  : prev,
+                              )
+                            }
+                          />
+                        </label>
+                      );
+                    })}
+                    <label className="text-xs text-text-secondary">
+                      Buyer
+                      <Select
+                        value={productForm.buyer}
+                        onChange={(e) =>
+                          setProductForm((prev) =>
+                            prev ? { ...prev, buyer: e.target.value } : prev,
+                          )
+                        }
+                      >
+                        <option value="">Unassigned</option>
+                        {values.buyers.map((buyer) => (
+                          <option key={buyer} value={buyer}>
+                            {buyer}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label className="text-xs text-text-secondary">
+                      Department
+                      <Select
+                        value={productForm.department}
+                        onChange={(e) =>
+                          setProductForm((prev) =>
+                            prev
+                              ? { ...prev, department: e.target.value }
+                              : prev,
+                          )
+                        }
+                      >
+                        <option value="">Unassigned</option>
+                        {values.departments.map((department) => (
+                          <option key={department} value={department}>
+                            {department}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label className="text-xs text-text-secondary">
+                      Bents price
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={productForm.bents_price}
+                        onChange={(e) =>
+                          setProductForm((prev) =>
+                            prev
+                              ? { ...prev, bents_price: Number(e.target.value) }
+                              : prev,
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <>
+                    <p>
+                      <b>Margin:</b> {marginLabel(selected)} |{" "}
+                      <b>Latest check:</b>{" "}
+                      {new Date(selected.lastCheckedAt).toLocaleString()}
+                    </p>
+                  </>
+                )}
+
+                <div className="rounded-lg border bg-panel p-3 space-y-3">
+                  <p className="font-medium">
+                    Competitor comparison ({selected.competitorCount})
+                  </p>
+                  {competitorForm.length === 0 && (
+                    <p className="rounded border border-dashed p-4 text-sm text-text-secondary">
+                      No competitor listings yet. Keep the product and add
+                      listings when mappings are available.
+                    </p>
+                  )}
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {sortCompetitorListings(competitorForm).map((c) => {
+                      const diff = formatDiff(c);
+                      const diagnostics = diagnosticsWarnings(c);
+                      const isEditing = editingCompetitorId === c.id;
+                      return (
+                        <div
+                          key={c.id}
+                          className="rounded-lg border bg-card p-3 space-y-3"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-3xl font-bold leading-none">
+                                {competitorCardPriceLabel(c)}
+                              </p>
+                              <p
+                                className={`mt-1 text-xs font-medium ${diff.tone}`}
+                              >
+                                {diff.text}
+                              </p>
+                              <p className="text-sm text-text-secondary dark:text-text-secondary mt-1">
+                                {c.competitorName}
+                              </p>
+                            </div>
+                            <span
+                              className={`rounded-full px-2 py-1 text-xs font-medium ${statusTone[c.lastCheckStatus]}`}
+                            >
+                              {statusText(c.lastCheckStatus)}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-xs text-slate-700 dark:text-foreground">
+                            <p>
+                              <b>Stock:</b> {c.competitorStockStatus}
+                            </p>
+                            <p>
+                              <b>Checked:</b>{" "}
+                              {new Date(c.lastCheckedAt).toLocaleString()}
+                            </p>
+                            {c.checkErrorMessage && (
+                              <p className="col-span-2 text-amber-700 dark:text-amber-400">
+                                {c.checkErrorMessage}
+                              </p>
+                            )}
+                          </div>
+
+                          <details className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-border dark:bg-surface-raised">
+                            <summary className="cursor-pointer font-medium text-text-secondary dark:text-text-secondary">
+                              Diagnostics
+                            </summary>
+                            <div className="mt-2 space-y-1 text-text-secondary dark:text-text-secondary">
+                              <p>
+                                <b>Source:</b>{" "}
+                                {c.extractionSource || "Unknown adapter"}
+                              </p>
+                              <p>{trustNote(c)}</p>
+                              <p>
+                                <b>Diagnostics details:</b>{" "}
+                                {diagnostics.length
+                                  ? diagnostics.join(" ")
+                                  : "No diagnostics available"}
+                              </p>
+                            </div>
+                          </details>
+
+                          {isEditing && (
+                            <div className="grid gap-2 md:grid-cols-2">
+                              <label className="text-xs">
+                                Competitor name
+                                <Select
+                                  value={c.competitorName}
+                                  onChange={(e) =>
+                                    setCompetitorForm((prev) =>
+                                      prev.map((x) =>
+                                        x.id === c.id
+                                          ? {
+                                              ...x,
+                                              competitorName: e.target.value,
+                                            }
+                                          : x,
+                                      ),
+                                    )
+                                  }
+                                >
+                                  <option value={c.competitorName}>
+                                    {c.competitorName}
+                                  </option>
+                                  {values.competitors
+                                    .filter((name) => name !== c.competitorName)
+                                    .map((name) => (
+                                      <option key={name} value={name}>
+                                        {name}
+                                      </option>
+                                    ))}
+                                </Select>
+                              </label>
+                              <label className="text-xs">
+                                Competitor URL
+                                <Input
+                                  value={c.competitorProductUrl}
+                                  onChange={(e) =>
+                                    setCompetitorForm((prev) =>
+                                      prev.map((x) =>
+                                        x.id === c.id
+                                          ? {
+                                              ...x,
+                                              competitorProductUrl:
+                                                e.target.value,
+                                            }
+                                          : x,
+                                      ),
+                                    )
+                                  }
+                                />
+                              </label>
+                              <label className="text-xs">
+                                Current price
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={c.competitorCurrentPrice ?? ""}
+                                  onChange={(e) =>
+                                    setCompetitorForm((prev) =>
+                                      prev.map((x) =>
+                                        x.id === c.id
+                                          ? {
+                                              ...x,
+                                              competitorCurrentPrice:
+                                                e.target.value === ""
+                                                  ? null
+                                                  : Number(e.target.value),
+                                            }
+                                          : x,
+                                      ),
+                                    )
+                                  }
+                                />
+                              </label>
+                              <label className="text-xs">
+                                Promo price
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={c.competitorPromoPrice ?? ""}
+                                  onChange={(e) =>
+                                    setCompetitorForm((prev) =>
+                                      prev.map((x) =>
+                                        x.id === c.id
+                                          ? {
+                                              ...x,
+                                              competitorPromoPrice:
+                                                e.target.value === ""
+                                                  ? null
+                                                  : Number(e.target.value),
+                                            }
+                                          : x,
+                                      ),
+                                    )
+                                  }
+                                />
+                              </label>
+                              <label className="text-xs md:col-span-2">
+                                Stock status
+                                <Select
+                                  value={c.competitorStockStatus}
+                                  onChange={(e) =>
+                                    setCompetitorForm((prev) =>
+                                      prev.map((x) =>
+                                        x.id === c.id
+                                          ? {
+                                              ...x,
+                                              competitorStockStatus: e.target
+                                                .value as CompetitorStockStatus,
+                                            }
+                                          : x,
+                                      ),
+                                    )
+                                  }
+                                >
+                                  {stockOptions.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </Select>
+                              </label>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            <a
+                              href={c.competitorProductUrl || "#"}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-surface-raised dark:text-foreground dark:hover:bg-surface-hover"
+                            >
+                              View competitor page
+                            </a>
+                            <Button
+                              onClick={() => runRefresh(undefined, [c.id])}
+                              disabled={refreshing}
+                            >
+                              Refresh this competitor
+                            </Button>
+                            {isEditing ? (
+                              <>
+                                <Button onClick={() => saveCompetitorEdit(c)}>
+                                  Save
+                                </Button>
+                                <Button
+                                  className="bg-slate-500"
+                                  onClick={() => {
+                                    setEditingCompetitorId(null);
+                                    setCompetitorForm(
+                                      selected.competitorListings,
+                                    );
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                className="bg-slate-700"
+                                onClick={() => setEditingCompetitorId(c.id)}
+                              >
+                                Edit competitor
+                              </Button>
+                            )}
+                            <Button
+                              className="bg-rose-700"
+                              onClick={() => deleteCompetitor(c.id)}
+                            >
+                              Delete competitor
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <p className="text-sm text-text-secondary dark:text-text-secondary">
+                  <b>Action owner:</b> {selected.actionOwner} |{" "}
+                  <b>Internal note:</b> {selected.internalNote || "No note yet"}
+                </p>
+                {saveMessage && (
+                  <p className="text-sm text-slate-700 dark:text-foreground">
+                    {saveMessage}
+                  </p>
+                )}
+                {duplicateSku && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm">
+                    <p>
+                      SKU <b>{duplicateSku.targetSku}</b> already exists on{" "}
+                      <b>{duplicateSku.targetName}</b>. Choose merge to reassign
+                      competitor listings to the existing product.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        className="bg-amber-700"
+                        onClick={runMergeIntoTarget}
+                        disabled={merging}
+                      >
+                        {merging ? "Merging..." : "Merge into existing SKU"}
+                      </Button>
+                      <Button
+                        className="bg-slate-500"
+                        onClick={() => setDuplicateSku(null)}
+                        disabled={merging}
+                      >
+                        Cancel merge
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {mergeSummary && (
+                  <p className="text-sm text-emerald-700">
+                    Merged successfully: moved{" "}
+                    {mergeSummary.movedCompetitorCount} competitor listings,
+                    skipped {mergeSummary.skippedDuplicateCompetitorCount}{" "}
+                    duplicates, moved {mergeSummary.movedNotesCount} notes and{" "}
+                    {mergeSummary.movedHistoryCount} history rows.{" "}
+                    {mergeSummary.sourceDeleted
+                      ? "Source product removed."
+                      : "Source product retained because linked records remain."}
+                  </p>
+                )}
+                {editMode && (
+                  <div className="flex gap-2">
+                    <Button onClick={saveEdits} disabled={saving}>
+                      {saving ? "Saving..." : "Save changes"}
+                    </Button>
+                    <Button
+                      className="bg-slate-500"
+                      onClick={() => {
+                        setEditMode(false);
+                        setProductForm(null);
+                        setCompetitorForm([]);
+                        setSelectedId(selected.id);
+                        setDuplicateSku(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }
