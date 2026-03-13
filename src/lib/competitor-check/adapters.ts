@@ -125,6 +125,11 @@ function isWebbsHost(raw: string): boolean {
   return /(^|\.)webbsdirect\.co\.uk$/i.test(normalizedHost);
 }
 
+function isSquiresHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)squiresgardencentres\.co\.uk$/i.test(normalizedHost) || /(^|\.)squires\.co\.uk$/i.test(normalizedHost);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -1173,6 +1178,113 @@ class WebbsAdapter implements CompetitorAdapter {
   }
 }
 
+class SquiresAdapter implements CompetitorAdapter {
+  name = "squires";
+
+  supports(url: string) {
+    return isSquiresHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    if (!response.ok) throw new AdapterExtractionError(`Squires adapter failed: HTTP ${response.status}`);
+    const html = await response.text();
+
+    const checkedSelectors = [
+      ".special-price .price",
+      ".price-container .special-price .price",
+      ".price-container .price"
+    ];
+
+    const selectorPatterns: Array<{ selector: string; pattern: RegExp }> = [
+      {
+        selector: ".special-price .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bspecial-price\b[^"']*["'][^>]*>[\s\S]{0,500}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i
+      },
+      {
+        selector: ".price-container .special-price .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*\bspecial-price\b[^"']*["'][^>]*>[\s\S]{0,600}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i
+      },
+      {
+        selector: ".price-container .price",
+        pattern:
+          /<[^>]*class=["'][^"']*\bprice-container\b[^"']*["'][^>]*>[\s\S]{0,1000}?<[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>([\s\S]*?)<\//i
+      }
+    ];
+
+    const selectorsFound: Record<string, boolean> = {};
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
+
+    for (const { selector, pattern } of selectorPatterns) {
+      const match = html.match(pattern);
+      const extractedText = match?.[1] ? stripTags(match[1]) : "";
+      const parsed = extractedText ? parseGbpCurrency(extractedText) : null;
+      selectorsFound[selector] = Boolean(extractedText);
+      if (extractedText) {
+        candidateValues.push({ source_selector: selector, extracted_text: extractedText, parsed });
+      }
+    }
+
+    const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
+    if (!accepted || accepted.parsed === null) {
+      throw new AdapterExtractionError(
+        `Squires price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}. Candidate values: ${candidateValues.map((candidate) => `${candidate.source_selector}=${candidate.extracted_text}`).join(" | ") || "none"}`,
+        {
+          adapter_attempted: this.name,
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          accepted_value: null,
+          rejected_values: candidateValues,
+          rejection_reasons: ["required_special_price_selector_missing_or_invalid"]
+        }
+      );
+    }
+
+    const wasMatch = html.match(/<[^>]*class=["'][^"']*\bold-price\b[^"']*["'][^>]*>([\s\S]*?)<\//i);
+    const wasText = wasMatch?.[1] ? stripTags(wasMatch[1]) : "";
+    const wasPrice = wasText ? parseGbpCurrency(wasText) : null;
+
+    const stock = /\bout\s+of\s+stock\b|\bsold\s+out\b|\bunavailable\b/i.test(html)
+      ? "Out of Stock"
+      : /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/i.test(html)
+        ? "Low Stock"
+        : /\bin\s+stock\b|\bavailable\b/i.test(html)
+          ? "In Stock"
+          : "Unknown";
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: wasPrice,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "squires_selector_adapter",
+      metadata: {
+        extraction_method: "deterministic_selector",
+        extracted_text: accepted.extracted_text,
+        source_selector: accepted.source_selector,
+        adapter_attempted: this.name,
+        matched_hostname: hostFromUrl(input.competitorUrl),
+        normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
+        rejection_reasons: []
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -1210,6 +1322,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (isRuxleyManorHost(host)) return false;
     if (isScotsdalesHost(host)) return false;
     if (isWebbsHost(host)) return false;
+    if (isSquiresHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -1282,6 +1395,7 @@ const adapters: CompetitorAdapter[] = [
   new RuxleyManorAdapter(),
   new ScotsdalesAdapter(),
   new WebbsAdapter(),
+  new SquiresAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
