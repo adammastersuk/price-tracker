@@ -129,8 +129,8 @@ export function CsvImport({ onImported }: { onImported: () => Promise<void> }) {
       <CardContent className="space-y-4">
         <div>
           <h3 className="font-semibold">CSV Import</h3>
-          <p className="mt-1 text-sm text-slate-600">Validate first, then confirm import. Missing SKU/name/price/URLs are blocking errors. Unmatched buyer/department/competitor are warnings.</p>
-          <p className="text-sm text-slate-600">Unmatched values are not auto-created in Settings.</p>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Validate first, then confirm import. Missing SKU/name/price/URLs are blocking errors. Unmatched buyer/department/competitor are warnings.</p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">Unmatched values are not auto-created in Settings.</p>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -145,10 +145,10 @@ export function CsvImport({ onImported }: { onImported: () => Promise<void> }) {
           onDragOver={(event) => { event.preventDefault(); setDragActive(true); }}
           onDragLeave={() => setDragActive(false)}
           onDrop={(event) => { event.preventDefault(); setDragActive(false); handleFileSelected(event.dataTransfer.files?.[0] ?? null); }}
-          className={`w-full rounded-xl border-2 border-dashed p-4 text-left transition ${dragActive ? "border-primary bg-blue-50" : "border-slate-300 bg-slate-50"}`}
+          className={`w-full rounded-xl border-2 border-dashed p-4 text-left transition ${dragActive ? "border-primary bg-blue-50 dark:bg-slate-800" : "border-border bg-muted"}`}
         >
-          <p className="text-sm font-medium text-slate-700">Drag and drop a CSV file here, or click to browse.</p>
-          <p className="mt-2 text-xs text-slate-500">Selected file: {selectedFileName}</p>
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-100">Drag and drop a CSV file here, or click to browse.</p>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Selected file: {selectedFileName}</p>
         </button>
 
         <div className="flex flex-wrap items-start gap-3">
@@ -158,7 +158,7 @@ export function CsvImport({ onImported }: { onImported: () => Promise<void> }) {
         </div>
 
         {summary ? (
-          <div className="rounded-lg border bg-slate-50 p-3 text-sm text-slate-700 space-y-2">
+          <div className="rounded-lg border bg-slate-50 p-3 text-sm text-slate-700 dark:text-slate-100 space-y-2">
             <p className="font-medium">Validation summary</p>
             <p>Valid: {summary.rowsValid} • Warning: {summary.rowsWithWarnings} • Error: {summary.rowsWithErrors}</p>
             <p>Unmatched buyer: {summary.unmatchedBuyers.length} • Unmatched department: {summary.unmatchedDepartments.length} • Unconfigured competitor: {summary.unmatchedCompetitors.length}</p>
@@ -174,7 +174,7 @@ export function CsvImport({ onImported }: { onImported: () => Promise<void> }) {
         ) : null}
 
         {validationErrors.length > 0 ? (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
             <p className="font-medium">Please check your CSV file:</p>
             <ul className="mt-1 list-disc pl-5">{validationErrors.map((error) => <li key={error}>{error}</li>)}</ul>
           </div>

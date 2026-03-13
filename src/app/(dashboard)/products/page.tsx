@@ -47,8 +47,8 @@ export default function ProductsPage() {
   }), [searchParams]);
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Products</h2>
+    <div className="space-y-4 rounded-2xl border bg-panel p-4 md:p-5">
+      <h2 className="text-xl font-semibold text-foreground">Products</h2>
       <CsvImport onImported={loadProducts} />
       <ProductsTable rows={rows} onRefreshDone={loadProducts} initialFilters={initialFilters} configuredOptions={configuredOptions} initialSelectedProductParam={selectedProductParam} />
     </div>
