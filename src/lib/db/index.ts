@@ -207,7 +207,7 @@ const defaultRuntimeSettings: RuntimeSettings = {
   }
 };
 
-const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
+const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*),product_cycle_history(*),product_source_history(*)";
 
 function isTrustworthyListing(comp: CompetitorListing): boolean {
   if (comp.lastCheckStatus !== "success") return false;
