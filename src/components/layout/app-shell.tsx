@@ -1,22 +1,23 @@
 "use client";
 
 import Link from "next/link";
+import type { Route } from "next";
 import { usePathname } from "next/navigation";
 import { BarChart3, Bell, CircleHelp, CreditCard, LayoutDashboard, Moon, Package, Settings, Sparkles, Sun, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
-const primaryNav = [
+const primaryNav: Array<{ href: Route; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/products", label: "Products", icon: Package },
   { href: "/exceptions", label: "Exceptions", icon: TriangleAlert }
-] as const;
+];
 
-const secondaryNav = [
+const secondaryNav: Array<{ href: Route; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/settings?tab=billing", label: "Billing", icon: CreditCard },
-  { href: "/settings?tab=help", label: "Help", icon: CircleHelp }
-] as const;
+  { href: "/settings", label: "Billing", icon: CreditCard },
+  { href: "/settings", label: "Help", icon: CircleHelp }
+];
 
 type Theme = "light" | "dark";
 
@@ -44,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     localStorage.setItem("price-tracker-theme", nextTheme);
   };
 
-  const NavLink = ({ href, label, icon: Icon, compact = false }: { href: string; label: string; icon: React.ComponentType<{ className?: string }>; compact?: boolean }) => {
+  const NavLink = ({ href, label, icon: Icon, compact = false }: { href: Route; label: string; icon: React.ComponentType<{ className?: string }>; compact?: boolean }) => {
     const isActive = pathname.startsWith(href);
     return (
       <Link
