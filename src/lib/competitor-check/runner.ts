@@ -50,6 +50,12 @@ interface RefreshTarget {
     previousValidPrice: number | null;
     lastCheckedAt?: string;
   }>;
+  cycleTargets: Array<{
+    sourceType: "bents" | "competitor";
+    sourceName: string;
+    url: string;
+    mappingId?: string;
+  }>;
   refreshTier: "default" | "priority";
 }
 
@@ -167,6 +173,20 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
       return true;
     });
 
+    const cycleTargets: RefreshTarget["cycleTargets"] = [
+      {
+        sourceType: "bents",
+        sourceName: "Bents",
+        url: product.bentsProductUrl ?? ""
+      },
+      ...filteredMappings.map((mapping) => ({
+        sourceType: "competitor" as const,
+        sourceName: mapping.competitor_name,
+        url: mapping.competitor_url ?? "",
+        mappingId: mapping.id
+      }))
+    ];
+
     if (!filteredMappings.length && !product.bentsProductUrl) {
       continue;
     }
@@ -179,6 +199,7 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
       costPrice: product.costPrice,
       bentsPrice: product.bentsRetailPrice,
       bentsUrl: product.bentsProductUrl,
+      cycleTargets,
       refreshTier,
       competitorMappings: filteredMappings.map((mapping) => ({
         mappingId: mapping.id,
@@ -232,7 +253,7 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       });
     }
 
-    return {
+    const sourceResult: SourceCheckResult = {
       sourceType: "bents",
       sourceName: "Bents",
       url: normalizedBentsUrl || target.bentsUrl,
@@ -244,12 +265,10 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       checkedAt,
       notes: result.competitor_current_price === null ? "Bents price token not found; preserving last known Bents price" : "",
       extractionSource: result.extraction_source,
-      metadata: {
-        ...(result.metadata ?? {}),
-        selected_adapter: adapter.name,
-        normalized_url: normalizedBentsUrl || null
-      }
-    };
+      metadata: result.metadata
+    }
+
+    return sourceResult;
   } catch (error) {
     if (BENTS_DIAGNOSTICS_ENABLED) {
       console.warn("[bents-check-failed]", {
@@ -275,10 +294,7 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       checkedAt,
       notes: reason,
       extractionSource: `failed:${adapter.name}`,
-      metadata: {
-        selected_adapter: adapter.name,
-        normalized_url: normalizedBentsUrl || null
-      }
+      metadata: undefined
     };
   }
 }
@@ -523,14 +539,23 @@ async function updateProductFromCycle(target: RefreshTarget, bentsResult: Source
 
 async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>, runId?: string): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; sourceResults: SourceCheckResult[]; }> {
   const checkedAt = new Date().toISOString();
-  const bentsResult = await checkBentsSource(target, checkedAt);
-  const sourceResults: SourceCheckResult[] = [bentsResult];
+  const sourceResults: SourceCheckResult[] = [];
+  let bentsResult: SourceCheckResult | null = null;
 
   const failures: RefreshFailure[] = [];
   let hadCompetitorSuccess = false;
   let suspicious = false;
 
-  for (const mapping of target.competitorMappings) {
+  for (const cycleTarget of target.cycleTargets) {
+    if (cycleTarget.sourceType === "bents") {
+      bentsResult = await checkBentsSource(target, checkedAt);
+      sourceResults.push(bentsResult);
+      continue;
+    }
+
+    const mapping = target.competitorMappings.find((candidate) => candidate.mappingId === cycleTarget.mappingId);
+    if (!mapping) continue;
+
     const checked = await checkCompetitorSource(target, mapping, runtime, checkedAt);
     sourceResults.push(checked.result);
     if (checked.failure) failures.push(checked.failure);
@@ -538,7 +563,12 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
     if (checked.suspicious) suspicious = true;
   }
 
-  await updateProductFromCycle(target, bentsResult, sourceResults);
+  const ensuredBentsResult = bentsResult ?? await checkBentsSource(target, checkedAt);
+  if (!bentsResult) {
+    sourceResults.unshift(ensuredBentsResult);
+  }
+
+  await updateProductFromCycle(target, ensuredBentsResult, sourceResults);
 
   if (runId) {
     console.info("[product-refresh] executed product cycle", {
@@ -547,7 +577,7 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
       sku: target.sku,
       sourceCount: sourceResults.length,
       bentsInvoked: true,
-      bentsStatus: bentsResult.status,
+      bentsStatus: ensuredBentsResult.status,
       competitorSourceCount: sourceResults.filter((source) => source.sourceType === "competitor").length
     });
   }
@@ -606,16 +636,17 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
         bentsIncluded: sourceResults.some((source) => source.sourceType === "bents")
       });
     }
+
   } catch (error) {
     console.warn("Failed to persist cycle/source history", error);
   }
 
-  const failedReason = failures[0]?.reason ?? (!bentsResult.success ? (bentsResult.notes ?? "Bents source check failed") : undefined);
+  const failedReason = failures[0]?.reason ?? (!ensuredBentsResult.success ? (ensuredBentsResult.notes ?? "Bents source check failed") : undefined);
   return {
     sourceResults,
     failure: failedReason ? { productId: target.productId, sku: target.sku, competitorUrl: failures[0]?.competitorUrl ?? target.bentsUrl, reason: failedReason } : undefined,
     suspicious,
-    succeeded: bentsResult.success || hadCompetitorSuccess
+    succeeded: ensuredBentsResult.success || hadCompetitorSuccess
   };
 }
 
@@ -635,27 +666,11 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
         run_id: runId,
         product_id: target.productId,
         status: "queued",
-        competitor_name: "Bents + competitors",
+        competitor_name: "Product cycle",
         competitor_url: target.bentsUrl,
         metadata: { target }
       });
     }
-  }
-
-  if (options.triggerSource === "manual") {
-    console.info("[product-refresh] queued product cycle refresh targets", {
-      runId: runId ?? null,
-      targetCount: targets.length,
-      productCount: options.productIds?.length ?? 0,
-      competitorListingCount: options.competitorListingIds?.length ?? 0,
-      sampleTarget: targets[0]
-        ? {
-            productId: targets[0].productId,
-            hasBentsUrl: Boolean(targets[0].bentsUrl),
-            competitorMappings: targets[0].competitorMappings.length
-          }
-        : null
-    });
   }
 
   return { runId: runId ?? undefined, queued: targets.length, total: targets.length };
@@ -678,7 +693,24 @@ async function readQueuedTarget(runId: string): Promise<QueuedTarget | null> {
       bentsPrice: Number(target.bentsPrice ?? 0),
       bentsUrl: target.bentsUrl ?? row.competitor_url ?? "",
       refreshTier: target.refreshTier === "priority" ? "priority" : "default",
-      competitorMappings: Array.isArray(target.competitorMappings) ? target.competitorMappings : []
+      competitorMappings: Array.isArray(target.competitorMappings) ? target.competitorMappings : [],
+      cycleTargets: Array.isArray(target.cycleTargets)
+        ? target.cycleTargets
+        : [
+            {
+              sourceType: "bents",
+              sourceName: "Bents",
+              url: target.bentsUrl ?? row.competitor_url ?? ""
+            },
+            ...(Array.isArray(target.competitorMappings)
+              ? target.competitorMappings.map((mapping) => ({
+                  sourceType: "competitor" as const,
+                  sourceName: mapping.competitorName ?? "Unknown competitor",
+                  url: mapping.competitorUrl ?? "",
+                  mappingId: mapping.mappingId
+                }))
+              : [])
+          ]
     }
   };
 }

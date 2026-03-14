@@ -275,16 +275,37 @@ function mapToTrackedProductRow(
   const sourceHistory = [...sourceHistoryRows].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
   const cycleHistory = [...cycleHistoryRows].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
   const latestCycle = cycleHistory[0];
-  const lastFullCycle = cycleHistory.find((c) => c.failed_count === 0 && c.source_count > 0) ?? null;
+  const lastFullCycle = cycleHistory.find((c) => c.source_count > 0 && c.success_count === c.source_count && c.failed_count === 0 && c.suspicious_count === 0) ?? null;
 
-  const bentsSource = sourceHistory.find((s) => s.source_type === "bents") ?? null;
-  const competitorSourceHistory = sourceHistory.filter((s) => s.source_type === "competitor");
-  const competitorCheckedAt = competitorSourceHistory[0]?.checked_at ?? null;
+  const latestCycleSources = latestCycle
+    ? sourceHistory.filter((s) => s.cycle_id === latestCycle.id)
+    : [];
+
+  const latestCycleSourcesByTimestamp = latestCycle && latestCycleSources.length === 0
+    ? sourceHistory.filter((s) => s.checked_at === latestCycle.checked_at)
+    : [];
+  const effectiveLatestCycleSources = latestCycleSources.length > 0
+    ? latestCycleSources
+    : latestCycleSourcesByTimestamp;
+
+  const bentsSource = effectiveLatestCycleSources.find((s) => s.source_type === "bents")
+    ?? sourceHistory.find((s) => s.source_type === "bents")
+    ?? null;
+  const competitorSourceHistory = effectiveLatestCycleSources.filter((s) => s.source_type === "competitor");
+  const competitorCheckedAt = competitorSourceHistory[0]?.checked_at ?? latestCycle?.checked_at ?? null;
   const competitorTotal = competitorListings.length;
-  const competitorSuccess = competitorListings.filter((l) => l.lastCheckStatus === "success").length;
-  const competitorFailed = competitorListings.filter((l) => l.lastCheckStatus === "failed").length;
-  const competitorSuspicious = competitorListings.filter((l) => l.lastCheckStatus === "suspicious").length;
-  const competitorPending = competitorListings.filter((l) => l.lastCheckStatus === "pending").length;
+  const competitorSuccess = latestCycle
+    ? competitorSourceHistory.filter((s) => s.status === "success").length
+    : competitorListings.filter((l) => l.lastCheckStatus === "success").length;
+  const competitorFailed = latestCycle
+    ? competitorSourceHistory.filter((s) => s.status === "failed").length
+    : competitorListings.filter((l) => l.lastCheckStatus === "failed").length;
+  const competitorSuspicious = latestCycle
+    ? competitorSourceHistory.filter((s) => s.status === "suspicious").length
+    : competitorListings.filter((l) => l.lastCheckStatus === "suspicious").length;
+  const competitorPending = latestCycle
+    ? Math.max(competitorTotal - competitorSourceHistory.length, 0)
+    : competitorListings.filter((l) => l.lastCheckStatus === "pending").length;
   const competitorStale = competitorCheckedAt ? (nowTs - new Date(competitorCheckedAt).getTime()) > staleMs : true;
 
   const bentsCheckedAt = bentsSource?.checked_at ?? null;
@@ -314,7 +335,7 @@ function mapToTrackedProductRow(
     lastFullCheckAt: lastFullCycle?.checked_at ?? null,
     successfulSources: latestCycle?.success_count ?? competitorSuccess + (bentsSource?.success ? 1 : 0),
     failedSources: latestCycle?.failed_count ?? (bentsSource && !bentsSource.success ? 1 : 0) + competitorFailed,
-    totalSources: latestCycle?.source_count ?? competitorTotal + 1,
+    totalSources: latestCycle?.source_count ?? competitorTotal + (product.product_url ? 1 : 0),
     partialFailure: (latestCycle?.failed_count ?? 0) > 0,
     stale: latestCycle?.checked_at ? (nowTs - new Date(latestCycle.checked_at).getTime()) > staleMs : true
   };

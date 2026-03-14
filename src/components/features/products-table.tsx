@@ -1423,8 +1423,9 @@ export function ProductsTable({
                           )}
                           <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
                             <span className={`rounded-full px-2 py-0.5 ${monitorabilityTone[r.monitorability.category]}`}>{r.monitorability.label}</span>
-                            <span className={`rounded-full px-2 py-0.5 ${r.sourceHealth.bents.success ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700"}`}>Bents {r.sourceHealth.bents.success ? "ok" : "fail"}</span>
-                            <span className={`rounded-full px-2 py-0.5 ${r.cycleHealth.partialFailure ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{r.cycleHealth.successfulSources}/{r.cycleHealth.totalSources} sources</span>
+                            <span className={`rounded-full px-2 py-0.5 ${r.sourceHealth.bents.success ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700"}`}>Bents: {r.sourceHealth.bents.success ? "Success" : "Failed"}</span>
+                            <span className={`rounded-full px-2 py-0.5 ${r.sourceHealth.competitors.pending > 0 ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>Competitors: {r.sourceHealth.competitors.success + r.sourceHealth.competitors.failed + r.sourceHealth.competitors.suspicious}/{r.sourceHealth.competitors.total} checked</span>
+                            <span className={`rounded-full px-2 py-0.5 ${r.cycleHealth.partialFailure ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>Cycle sources: {r.cycleHealth.successfulSources}/{r.cycleHealth.totalSources} successful</span>
                             {r.cycleHealth.stale ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Stale data</span> : null}
                             {badges.hasLowest && (
                               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">
@@ -1447,7 +1448,7 @@ export function ProductsTable({
                               {summary.extra}
                             </p>
                           )}
-                          <p className="text-xs text-text-muted">{freshnessLabel(r)} · {r.cycleHealth.lastFullCheckAt ? `Last full check ${new Date(r.cycleHealth.lastFullCheckAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No full check yet"}</p>
+                          <p className="text-xs text-text-muted">{freshnessLabel(r)} · {r.cycleHealth.lastFullCheckAt ? `Last full cycle success ${new Date(r.cycleHealth.lastFullCheckAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No full cycle success yet"}</p>
                         </>
                       );
                     })()}
@@ -1619,9 +1620,11 @@ export function ProductsTable({
                   <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Cycle health</p>
                   <div className="mt-2 space-y-1 text-xs text-text-secondary">
                     <p>{selected.monitorability.label}{selected.monitorability.reasons.length ? ` · ${selected.monitorability.reasons.join("; ")}` : ""}</p>
-                    <p>Bents check: {selected.sourceHealth.bents.status} {selected.sourceHealth.bents.checkedAt ? `(${new Date(selected.sourceHealth.bents.checkedAt).toLocaleString()})` : ""}</p>
-                    <p>Competitors: {selected.sourceHealth.competitors.success} success / {selected.sourceHealth.competitors.failed} failed / {selected.sourceHealth.competitors.total} total</p>
+                    <p>Bents (this product): {selected.sourceHealth.bents.status} {selected.sourceHealth.bents.checkedAt ? `(${new Date(selected.sourceHealth.bents.checkedAt).toLocaleString()})` : ""}</p>
+                    <p>Competitors (this product): {selected.sourceHealth.competitors.success} success / {selected.sourceHealth.competitors.failed} failed / {selected.sourceHealth.competitors.total} total</p>
+                    <p>Cycle sources successful: {selected.cycleHealth.successfulSources}/{selected.cycleHealth.totalSources}</p>
                     <p>{selected.cycleHealth.partialFailure ? "Partial failure" : "No partial failure"} · {selected.cycleHealth.stale ? "Stale data" : "Fresh"}</p>
+                    <p className="text-[11px] text-text-muted">Note: Settings scraper health is global adapter reliability; this panel is per-product result history.</p>
                   </div>
                 </div>
 
