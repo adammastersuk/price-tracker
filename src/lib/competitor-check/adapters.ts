@@ -1435,16 +1435,24 @@ class BentsAdapter implements CompetitorAdapter {
       headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
       cache: "no-store"
     });
-    if (!response.ok) throw new AdapterExtractionError(`Bents adapter failed: HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new AdapterExtractionError(`Bents adapter failed: HTTP ${response.status}`, {
+        adapter_attempted: this.name,
+        requested_url: input.competitorUrl,
+        http_status: response.status
+      });
+    }
 
     const html = await response.text();
 
-    const priceBlockMatch = html.match(/<[^>]*(?:class=["'][^"']*productView-price[^"']*["']|data-product-price-with-tax|price--withTax)[^>]*>[\s\S]{0,3500}?<\/[^>]+>/i);
-    const priceBlock = priceBlockMatch?.[0] ?? html;
+    const priceContainerMatch = html.match(/<[^>]*class=["'][^"']*productView-price[^"']*["'][^>]*>[\s\S]{0,5000}?<\/[^>]+>/i);
+    const priceContainer = priceContainerMatch?.[0] ?? html;
 
     const checkedSelectors = [
-      ".productView-price .price--withTax",
       "[data-product-price-with-tax]",
+      ".productView-price .price.price--withTax",
+      "button (Add to Bag - £xx.xx)",
+      ".productView-price (regex fallback)",
       ".in-stock",
       ".productView-delivery, .deliveryMessage, click-and-collect hints"
     ];
@@ -1453,13 +1461,12 @@ class BentsAdapter implements CompetitorAdapter {
     const selectorFound: Record<string, boolean> = {};
 
     const currentPatterns = [
-      { selector: ".productView-price .price--withTax", pattern: /<[^>]*class=["'][^"']*price[^"']*price--withTax[^"']*["'][^>]*>([\s\S]*?)<\//gi },
-      { selector: "[data-product-price-with-tax]", pattern: /<[^>]*data-product-price-with-tax[^>]*>([\s\S]*?)<\//gi },
-      { selector: ".productView-price", pattern: /<[^>]*class=["'][^"']*productView-price[^"']*["'][^>]*>([\s\S]{0,2000}?)<\/[^>]+>/gi }
+      { selector: "[data-product-price-with-tax]", pattern: /<span[^>]*data-product-price-with-tax[^>]*>([\s\S]*?)<\/span>/gi },
+      { selector: ".productView-price .price.price--withTax", pattern: /<[^>]*class=["'][^"']*price[^"']*price--withTax[^"']*["'][^>]*>([\s\S]*?)<\//gi }
     ];
 
     for (const c of currentPatterns) {
-      const matches = [...priceBlock.matchAll(c.pattern)];
+      const matches = [...html.matchAll(c.pattern)];
       selectorFound[c.selector] = matches.length > 0;
       for (const m of matches) {
         const text = stripTags(m[1] ?? "");
@@ -1468,9 +1475,30 @@ class BentsAdapter implements CompetitorAdapter {
       }
     }
 
+    const addToBagMatch = html.match(/add\s*to\s*bag[^£]{0,80}(£\s?(\d{1,3}(,\d{3})*(\.\d{2})?))/i);
+    selectorFound["button (Add to Bag - £xx.xx)"] = Boolean(addToBagMatch?.[1]);
+    if (addToBagMatch?.[1]) {
+      currentCandidates.push({
+        selector: "button (Add to Bag - £xx.xx)",
+        text: addToBagMatch[0],
+        parsed: parseGbpCurrency(addToBagMatch[1])
+      });
+    }
+
+    const containerRegexTokens = [...priceContainer.matchAll(/£\s?(\d{1,3}(,\d{3})*(\.\d{2})?)/gi)];
+    selectorFound[".productView-price (regex fallback)"] = containerRegexTokens.length > 0;
+    for (const token of containerRegexTokens) {
+      const text = token[0];
+      currentCandidates.push({
+        selector: ".productView-price (regex fallback)",
+        text,
+        parsed: parseGbpCurrency(text)
+      });
+    }
+
     const acceptedCurrent = currentCandidates.find((c) => c.parsed !== null && c.parsed > 0) ?? null;
 
-    const allPriceTokens = [...priceBlock.matchAll(/(?:£|&pound;|GBP)\s?[\d,.]{1,12}/gi)]
+    const allPriceTokens = [...priceContainer.matchAll(/(?:£|&pound;|GBP)\s?[\d,.]{1,12}/gi)]
       .map((m) => ({ text: stripTags(m[0]), parsed: parseGbpCurrency(m[0]) }))
       .filter((v) => v.parsed !== null) as Array<{ text: string; parsed: number }>;;
     const sortedUnique = [...new Set(allPriceTokens.map((v) => v.parsed))].sort((a, b) => b - a);
@@ -1479,12 +1507,15 @@ class BentsAdapter implements CompetitorAdapter {
     const was = current === null ? null : (sortedUnique.find((v) => v > current) ?? null);
     const promo = current !== null && was !== null && was > current ? current : null;
 
-    const savingsMatch = priceBlock.match(/save\s*(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i);
+    const savingsMatch = priceContainer.match(/save\s*(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i);
     const savingsText = savingsMatch ? stripTags(savingsMatch[0]) : null;
+
+    const rrpMatch = priceContainer.match(/(?:rrp|was)\s*(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i);
+    const rrpText = rrpMatch ? stripTags(rrpMatch[0]) : null;
 
     const inStockMatch = html.match(/<[^>]*class=["'][^"']*\bin-stock\b[^"']*["'][^>]*>([\s\S]*?)<\//i);
     selectorFound[".in-stock"] = Boolean(inStockMatch?.[1]);
-    const stockText = inStockMatch?.[1] ? stripTags(inStockMatch[1]) : stripTags(priceBlock);
+    const stockText = inStockMatch?.[1] ? stripTags(inStockMatch[1]) : stripTags(priceContainer);
     const stock = /out\s+of\s+stock|sold\s+out|unavailable/i.test(stockText)
       ? "Out of Stock"
       : /in\s+stock|available/i.test(stockText)
@@ -1503,7 +1534,11 @@ class BentsAdapter implements CompetitorAdapter {
         selectors_checked: checkedSelectors,
         selectors_found: selectorFound,
         candidate_values_found: currentCandidates,
-        availability_hints: availabilityMatches
+        availability_hints: availabilityMatches,
+        requested_url: input.competitorUrl,
+        http_status: response.status,
+        primary_selector_matched: selectorFound["[data-product-price-with-tax]"] || selectorFound[".productView-price .price.price--withTax"],
+        fallback_selector_matched: selectorFound["button (Add to Bag - £xx.xx)"] || selectorFound[".productView-price (regex fallback)"]
       });
     }
 
@@ -1522,7 +1557,16 @@ class BentsAdapter implements CompetitorAdapter {
         selectors_found: selectorFound,
         candidate_values_found: currentCandidates,
         accepted_selector: acceptedCurrent?.selector ?? null,
+        requested_url: input.competitorUrl,
+        http_status: response.status,
+        primary_selector_matched: selectorFound["[data-product-price-with-tax]"] || selectorFound[".productView-price .price.price--withTax"],
+        fallback_selector_matched: selectorFound["button (Add to Bag - £xx.xx)"] || selectorFound[".productView-price (regex fallback)"],
+        parsed_current_price: current,
+        parsed_stock_state: stock,
+        parsed_was_price: was,
+        parsed_promo_price: promo,
         savings_text: savingsText,
+        rrp_text: rrpText,
         availability_messages: availabilityMatches
       }
     };
