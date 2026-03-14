@@ -28,7 +28,7 @@ function AccordionSection({ title, count, open, onToggle, children }: { title: s
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsPayload>(defaultState);
   const [alerts, setAlerts] = useState<Array<{ id: string; reason: string; competitor_name?: string; status: string; created_at: string; gap_amount_gbp?: number; product_id?: string }>>([]);
-  const [healthRows, setHealthRows] = useState<Array<{ competitorName: string; health: string; successRate: number; failureRate: number; suspiciousCount: number; lastSuccessfulRun: string | null; selectors?: string[]; firstParty?: boolean; extractionSource?: string }>>([]);
+  const [healthRows, setHealthRows] = useState<Array<{ competitorName: string; health: string; successRate: number; failureRate: number; suspiciousCount: number; lastSuccessfulRun: string | null; lastFailureRun?: string | null; selectors?: string[]; firstParty?: boolean; extractionSource?: string }>>([]);
   const [activity, setActivity] = useState<Array<{ id: string; summary: string; created_at: string }>>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -83,6 +83,8 @@ export default function SettingsPage() {
   useEffect(() => { load().catch((err) => setError(err.message)); }, [load]);
 
   const departmentByName = useMemo(() => new Map(settings.departments.map((d) => [d.name, d.id])), [settings.departments]);
+  const bentsHealth = useMemo(() => healthRows.find((row) => row.firstParty) ?? null, [healthRows]);
+  const competitorHealthRows = useMemo(() => healthRows.filter((row) => !row.firstParty), [healthRows]);
 
   const runAction = async (action: () => Promise<void>, successText: string) => {
     setBusy(true); setError(""); setMessage("");
@@ -248,16 +250,32 @@ export default function SettingsPage() {
           <Card>
             <CardHeader><CardTitle>Scraper health</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
-              {healthRows.slice(0, 8).map((row) => (
-                <div key={row.competitorName} className={`rounded border px-3 py-2 ${row.firstParty ? "border-sky-300 bg-sky-50/50" : ""}`}>
+              {bentsHealth ? (
+                <div className="rounded border border-sky-300 bg-sky-50/50 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="font-medium">{row.competitorName}{row.firstParty ? " · Priority adapter" : ""}</p>
+                    <p className="font-medium">Bents first-party scraper</p>
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${bentsHealth.health === "Healthy" ? "bg-emerald-100 text-emerald-800" : bentsHealth.health === "Watch" ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-700"}`}>{bentsHealth.health}</span>
+                  </div>
+                  <p className="text-xs text-slate-500">Bents DOM adapter · global scraper reliability</p>
+                  <p className="text-xs text-slate-500">Success {bentsHealth.successRate}% · Fail {bentsHealth.failureRate}% · Suspicious {bentsHealth.suspiciousCount}</p>
+                  {bentsHealth.lastSuccessfulRun ? <p className="text-xs text-slate-500">Last success: {new Date(bentsHealth.lastSuccessfulRun).toLocaleString()}</p> : null}
+                  {bentsHealth.lastFailureRun ? <p className="text-xs text-slate-500">Last failure: {new Date(bentsHealth.lastFailureRun).toLocaleString()}</p> : null}
+                  {bentsHealth.extractionSource ? <p className="text-xs text-slate-500">Source id: {bentsHealth.extractionSource}</p> : null}
+                  {bentsHealth.selectors?.length ? <p className="text-xs text-slate-500">Signals: {bentsHealth.selectors.join(", ")}</p> : null}
+                </div>
+
+              ) : null}
+
+              {competitorHealthRows.slice(0, 8).map((row) => (
+                <div key={row.competitorName} className="rounded border px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">{row.competitorName}</p>
                     <span className={`rounded-full px-2 py-0.5 text-xs ${row.health === "Healthy" ? "bg-emerald-100 text-emerald-800" : row.health === "Watch" ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-700"}`}>{row.health}</span>
                   </div>
                   <p className="text-xs text-slate-500">Success {row.successRate}% · Fail {row.failureRate}% · Suspicious {row.suspiciousCount}</p>
                   {row.lastSuccessfulRun ? <p className="text-xs text-slate-500">Last success: {new Date(row.lastSuccessfulRun).toLocaleString()}</p> : null}
-                  {row.extractionSource ? <p className="text-xs text-slate-500">Source: {row.extractionSource}</p> : null}
-                  {row.selectors?.length ? <p className="text-xs text-slate-500">Signals: {row.selectors.join(", ")}</p> : null}
+                  {row.lastFailureRun ? <p className="text-xs text-slate-500">Last failure: {new Date(row.lastFailureRun).toLocaleString()}</p> : null}
+                  {row.extractionSource ? <p className="text-xs text-slate-500">Source id: {row.extractionSource}</p> : null}
                 </div>
               ))}
             </CardContent>

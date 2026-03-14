@@ -670,7 +670,7 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
         run_id: runId,
         product_id: target.productId,
         status: "queued",
-        competitor_name: "Bents + competitors",
+        competitor_name: "Product cycle",
         competitor_url: target.bentsUrl,
         metadata: { target }
       });
