@@ -231,20 +231,37 @@ export async function getScraperHealth(limit = 14) {
   const since = new Date(Date.now() - limit * 24 * 3600_000).toISOString();
 
   const aggregate = (
-    rows: Array<{ source_name: string; source_type: string; status: string; success: boolean; checked_at: string; metadata?: Record<string, unknown> | null; }>
+    rows: Array<{ source_name: string; source_type: string; status: string; success: boolean; checked_at: string; extraction_source?: string | null; metadata?: Record<string, unknown> | null; }>
   ) => {
-    const grouped = new Map<string, { competitorName: string; total: number; success: number; failed: number; suspicious: number; lastSuccess: string | null; selectors: string[]; firstParty: boolean }>();
+    const grouped = new Map<string, { competitorName: string; total: number; success: number; failed: number; suspicious: number; lastSuccess: string | null; lastFailure: string | null; selectors: string[]; firstParty: boolean; extractionSource: string | null }>();
     for (const row of rows) {
       const key = (row.source_name || "Unknown").trim() || "Unknown";
-      const entry = grouped.get(key) ?? { competitorName: key, total: 0, success: 0, failed: 0, suspicious: 0, lastSuccess: null, selectors: [], firstParty: row.source_type === "bents" || /bents/i.test(key) };
+      const entry = grouped.get(key) ?? {
+        competitorName: key,
+        total: 0,
+        success: 0,
+        failed: 0,
+        suspicious: 0,
+        lastSuccess: null,
+        lastFailure: null,
+        selectors: [],
+        firstParty: row.source_type === "bents" || /bents/i.test(key),
+        extractionSource: null
+      };
       entry.total += 1;
+      if (row.extraction_source && !entry.extractionSource) entry.extractionSource = row.extraction_source;
       if (row.success || row.status === "success") {
         entry.success += 1;
         if (!entry.lastSuccess || new Date(row.checked_at).getTime() > new Date(entry.lastSuccess).getTime()) {
           entry.lastSuccess = row.checked_at;
         }
       }
-      if (row.status === "failed") entry.failed += 1;
+      if (row.status === "failed") {
+        entry.failed += 1;
+        if (!entry.lastFailure || new Date(row.checked_at).getTime() > new Date(entry.lastFailure).getTime()) {
+          entry.lastFailure = row.checked_at;
+        }
+      }
       if (row.status === "suspicious") entry.suspicious += 1;
       const selectors = row.metadata?.selectors_checked;
       if (Array.isArray(selectors)) {
@@ -264,10 +281,11 @@ export async function getScraperHealth(limit = 14) {
         failureRate: Number((failureRate * 100).toFixed(1)),
         suspiciousCount: entry.suspicious,
         lastSuccessfulRun: entry.lastSuccess,
+        lastFailureRun: entry.lastFailure,
         health,
         selectors: entry.selectors,
         firstParty: entry.firstParty,
-        extractionSource: entry.firstParty ? "bents_dom_adapter" : undefined
+        extractionSource: entry.extractionSource ?? (entry.firstParty ? "bents_dom_adapter" : undefined)
       };
     });
 
@@ -280,6 +298,7 @@ export async function getScraperHealth(limit = 14) {
         failureRate: 0,
         suspiciousCount: 0,
         lastSuccessfulRun: null,
+        lastFailureRun: null,
         health: "Watch",
         selectors: [".price--withTax", "[data-product-price-with-tax]", ".in-stock"],
         firstParty: true,
@@ -312,6 +331,7 @@ export async function getScraperHealth(limit = 14) {
       status: row.status,
       success: row.status === "success",
       checked_at: row.checked_at,
+      extraction_source: null,
       metadata: null
     })));
   } catch (fallbackError) {
@@ -324,6 +344,7 @@ export async function getScraperHealth(limit = 14) {
       failureRate: 0,
       suspiciousCount: 0,
       lastSuccessfulRun: null,
+      lastFailureRun: null,
       health: "Watch",
       selectors: [".price--withTax", "[data-product-price-with-tax]", ".in-stock"],
       firstParty: true,
