@@ -404,32 +404,54 @@ async function loadOptionalCycleAndSourceHistory(productIds: string[]) {
   const cycleByProductId = new Map<string, ProductCycleHistoryRecord[]>();
   const sourceByProductId = new Map<string, ProductSourceHistoryRecord[]>();
 
-  try {
-    const cycleRows = await supabaseRequest<ProductCycleHistoryRecord[]>({
-      table: "product_cycle_history",
-      query: new URLSearchParams({ select: "*", product_id: `in.(${productIds.join(",")})`, order: "checked_at.desc", limit: "12000" })
-    });
-    for (const row of cycleRows) {
-      const list = cycleByProductId.get(row.product_id) ?? [];
-      list.push(row);
-      cycleByProductId.set(row.product_id, list);
-    }
-  } catch (error) {
-    console.warn("Cycle history unavailable; continuing without it", error);
-  }
+  const chunkSize = 150;
+  for (let index = 0; index < productIds.length; index += chunkSize) {
+    const chunk = productIds.slice(index, index + chunkSize);
+    const inClause = `in.(${chunk.join(",")})`;
 
-  try {
-    const sourceRows = await supabaseRequest<ProductSourceHistoryRecord[]>({
-      table: "product_source_history",
-      query: new URLSearchParams({ select: "*", product_id: `in.(${productIds.join(",")})`, order: "checked_at.desc", limit: "15000" })
-    });
-    for (const row of sourceRows) {
-      const list = sourceByProductId.get(row.product_id) ?? [];
-      list.push(row);
-      sourceByProductId.set(row.product_id, list);
+    try {
+      const cycleRows = await supabaseRequest<ProductCycleHistoryRecord[]>({
+        table: "product_cycle_history",
+        query: new URLSearchParams({
+          select: "*",
+          product_id: inClause,
+          order: "checked_at.desc",
+          limit: "12000"
+        })
+      });
+      for (const row of cycleRows) {
+        const list = cycleByProductId.get(row.product_id) ?? [];
+        list.push(row);
+        cycleByProductId.set(row.product_id, list);
+      }
+    } catch (error) {
+      console.warn("Cycle history unavailable for product chunk; continuing without it", {
+        chunkSize: chunk.length,
+        error
+      });
     }
-  } catch (error) {
-    console.warn("Source history unavailable; continuing without it", error);
+
+    try {
+      const sourceRows = await supabaseRequest<ProductSourceHistoryRecord[]>({
+        table: "product_source_history",
+        query: new URLSearchParams({
+          select: "*",
+          product_id: inClause,
+          order: "checked_at.desc",
+          limit: "15000"
+        })
+      });
+      for (const row of sourceRows) {
+        const list = sourceByProductId.get(row.product_id) ?? [];
+        list.push(row);
+        sourceByProductId.set(row.product_id, list);
+      }
+    } catch (error) {
+      console.warn("Source history unavailable for product chunk; continuing without it", {
+        chunkSize: chunk.length,
+        error
+      });
+    }
   }
 
   return { cycleByProductId, sourceByProductId };
