@@ -102,7 +102,11 @@ function hostFromUrl(raw: string): string {
   try {
     return new URL(raw).hostname.toLowerCase();
   } catch {
-    return "";
+    try {
+      return new URL(`https://${raw}`).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
   }
 }
 

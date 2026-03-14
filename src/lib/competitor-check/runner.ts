@@ -92,6 +92,15 @@ export interface RefreshSummary {
   pending?: number;
 }
 
+const BENTS_DIAGNOSTICS_ENABLED = process.env.LOG_BENTS_DIAGNOSTICS === "1";
+
+function normalizeSourceUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 function isSuspicious(previousPrice: number | null, nextPrice: number | null, highThresholdPercent: number): boolean {
   if (previousPrice === null || nextPrice === null || previousPrice === 0) return false;
   return Math.abs(((nextPrice - previousPrice) / previousPrice) * 100) >= highThresholdPercent;
@@ -201,19 +210,32 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
     };
   }
 
+  const normalizedBentsUrl = normalizeSourceUrl(target.bentsUrl);
+  const adapter = selectAdapter(normalizedBentsUrl || target.bentsUrl);
+
   try {
-    const adapter = selectAdapter(target.bentsUrl);
     const result = await adapter.fetchPriceSignal({
       sku: target.sku,
-      competitorUrl: target.bentsUrl,
+      competitorUrl: normalizedBentsUrl || target.bentsUrl,
       productName: target.productName,
       brand: target.brand
     });
 
+    if (BENTS_DIAGNOSTICS_ENABLED) {
+      console.info("[bents-check]", {
+        productId: target.productId,
+        sku: target.sku,
+        bentsUrl: target.bentsUrl,
+        normalizedBentsUrl: normalizedBentsUrl || null,
+        selectedAdapter: adapter.name,
+        parsedResult: result.competitor_current_price !== null
+      });
+    }
+
     return {
       sourceType: "bents",
       sourceName: "Bents",
-      url: target.bentsUrl,
+      url: normalizedBentsUrl || target.bentsUrl,
       currentPrice: result.competitor_current_price,
       previousPrice: target.bentsPrice,
       stockStatus: (result.competitor_stock_status as SourceCheckResult["stockStatus"]) ?? "Unknown",
@@ -222,21 +244,41 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       checkedAt,
       notes: result.competitor_current_price === null ? "Bents price token not found; preserving last known Bents price" : "",
       extractionSource: result.extraction_source,
-      metadata: result.metadata
+      metadata: {
+        ...(result.metadata ?? {}),
+        selected_adapter: adapter.name,
+        normalized_url: normalizedBentsUrl || null
+      }
     };
   } catch (error) {
+    if (BENTS_DIAGNOSTICS_ENABLED) {
+      console.warn("[bents-check-failed]", {
+        productId: target.productId,
+        sku: target.sku,
+        bentsUrl: target.bentsUrl,
+        normalizedBentsUrl: normalizedBentsUrl || null,
+        selectedAdapter: adapter.name,
+        error: error instanceof Error ? error.message : "Unknown Bents check failure"
+      });
+    }
+
     const reason = error instanceof Error ? error.message : "Unknown Bents check failure";
     return {
       sourceType: "bents",
       sourceName: "Bents",
-      url: target.bentsUrl,
+      url: normalizedBentsUrl || target.bentsUrl,
       currentPrice: target.bentsPrice,
       previousPrice: target.bentsPrice,
       stockStatus: "Unknown",
       success: false,
       status: "failed",
       checkedAt,
-      notes: reason
+      notes: reason,
+      extractionSource: `failed:${adapter.name}`,
+      metadata: {
+        selected_adapter: adapter.name,
+        normalized_url: normalizedBentsUrl || null
+      }
     };
   }
 }
