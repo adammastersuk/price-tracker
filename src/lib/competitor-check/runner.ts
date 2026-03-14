@@ -254,21 +254,6 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       });
     }
 
-    if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED) {
-      console.info("[bents-adapter-result]", {
-        productId: target.productId,
-        sku: target.sku,
-        requestedUrl: normalizedBentsUrl || target.bentsUrl,
-        adapter: adapter.name,
-        currentPrice: result.competitor_current_price,
-        stockStatus: result.competitor_stock_status,
-        promoPrice: result.competitor_promo_price,
-        wasPrice: result.competitor_was_price,
-        extractionSource: result.extraction_source,
-        metadata: result.metadata ?? null
-      });
-    }
-
     const sourceResult: SourceCheckResult = {
       sourceType: "bents",
       sourceName: "Bents",
@@ -281,19 +266,7 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       checkedAt,
       notes: result.competitor_current_price === null ? "Bents price token not found; preserving last known Bents price" : "",
       extractionSource: result.extraction_source,
-      metadata: {
-        ...(result.metadata ?? {}),
-        selected_adapter: adapter.name,
-        normalized_url: normalizedBentsUrl || null
-      }
-    };
-
-    if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED) {
-      console.info("[bents-source-check-result]", {
-        productId: target.productId,
-        sku: target.sku,
-        result: sourceResult
-      });
+      metadata: result.metadata
     }
 
     return sourceResult;
@@ -322,10 +295,7 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       checkedAt,
       notes: reason,
       extractionSource: `failed:${adapter.name}`,
-      metadata: {
-        selected_adapter: adapter.name,
-        normalized_url: normalizedBentsUrl || null
-      }
+      metadata: undefined
     };
   }
 }
@@ -684,20 +654,6 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
       });
     }
 
-    if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED) {
-      const bentsPersisted = sourceResults.find((source) => source.sourceType === "bents") ?? null;
-      console.info("[bents-cycle-count-classification]", {
-        runId: runId ?? null,
-        productId: target.productId,
-        sku: target.sku,
-        cycleId: cycleId ?? null,
-        cycleSourceCount: sourceResults.length,
-        cycleSuccessCount,
-        cycleFailedCount,
-        cycleSuspiciousCount,
-        bentsResult: bentsPersisted
-      });
-    }
   } catch (error) {
     console.warn("Failed to persist cycle/source history", error);
   }
@@ -732,22 +688,6 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
         metadata: { target }
       });
     }
-  }
-
-  if (options.triggerSource === "manual") {
-    console.info("[product-refresh] queued product cycle refresh targets", {
-      runId: runId ?? null,
-      targetCount: targets.length,
-      productCount: options.productIds?.length ?? 0,
-      competitorListingCount: options.competitorListingIds?.length ?? 0,
-      sampleTarget: targets[0]
-        ? {
-            productId: targets[0].productId,
-            hasBentsUrl: Boolean(targets[0].bentsUrl),
-            competitorMappings: targets[0].competitorMappings.length
-          }
-        : null
-    });
   }
 
   return { runId: runId ?? undefined, queued: targets.length, total: targets.length };
