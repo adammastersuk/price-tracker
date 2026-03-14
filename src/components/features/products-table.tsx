@@ -96,20 +96,11 @@ const stockOptions: CompetitorStockStatus[] = [
   "Unknown",
 ];
 
-const monitorabilityTone: Record<TrackedProductRow["monitorability"]["category"], string> = {
-  fully_monitorable: "bg-emerald-100 text-emerald-800",
-  partial: "bg-amber-100 text-amber-800",
-  missing_bents_url: "bg-rose-100 text-rose-700",
-  missing_competitor_urls: "bg-rose-100 text-rose-700",
-  inactive: "bg-slate-200 text-slate-700"
-};
-
-function freshnessLabel(row: TrackedProductRow) {
-  if (row.cycleHealth.lastCycleCheckedAt) {
-    return `Last cycle: ${new Date(row.cycleHealth.lastCycleCheckedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-  }
-  return "Last cycle: never";
-}
+const buyerSignalTone = {
+  cheaper: "bg-rose-100 text-rose-700",
+  higher: "bg-emerald-100 text-emerald-800",
+  inline: "bg-sky-100 text-sky-800",
+} as const;
 
 const workflowOptions = [
   "Open",
@@ -301,17 +292,19 @@ const sortCompetitorListings = (listings: CompetitorListing[]) =>
     })
     .map(({ listing }) => listing);
 
-const competitorSummary = (row: TrackedProductRow) => {
-  const valid = row.competitorListings.filter(
-    (c) =>
-      c.competitorCurrentPrice !== null &&
-      c.competitorCurrentPrice > 0 &&
-      c.lastCheckStatus === "success" &&
-      c.extractionMetadata?.trust_rejected !== true,
-  );
-  const lowest = [...valid].sort(
-    (a, b) => (a.competitorCurrentPrice ?? 0) - (b.competitorCurrentPrice ?? 0),
+const lowestTrustedListing = (row: TrackedProductRow) =>
+  sortCompetitorListings(
+    row.competitorListings.filter(
+      (c) =>
+        c.competitorCurrentPrice !== null &&
+        c.competitorCurrentPrice > 0 &&
+        c.lastCheckStatus === "success" &&
+        c.extractionMetadata?.trust_rejected !== true,
+    ),
   )[0];
+
+const competitorSummary = (row: TrackedProductRow) => {
+  const lowest = lowestTrustedListing(row);
   if (lowest) {
     return {
       primary: currency(lowest.competitorCurrentPrice ?? 0),
@@ -328,6 +321,54 @@ const competitorSummary = (row: TrackedProductRow) => {
     primary: "No valid price",
     secondary: row.competitorName === "No competitor" ? "" : row.competitorName,
     extra: "",
+  };
+};
+
+const buyerSignal = (row: TrackedProductRow) => {
+  const lowest = lowestTrustedListing(row);
+  if (!lowest) {
+    return {
+      label: "In line with competitor",
+      key: "inline" as const,
+      diffLabel: "No difference available",
+      checkedAt: row.lastCheckedAt,
+      isFresh: !row.cycleHealth.stale,
+    };
+  }
+
+  const diff = row.bentsRetailPrice - (lowest.competitorCurrentPrice ?? row.bentsRetailPrice);
+  const absDiff = currency(Math.abs(diff));
+  const pctDiff =
+    lowest.priceDifferencePercent !== null
+      ? `${Math.abs(lowest.priceDifferencePercent).toFixed(1)}%`
+      : null;
+
+  if (Math.abs(diff) < 0.005) {
+    return {
+      label: "In line with competitor",
+      key: "inline" as const,
+      diffLabel: "£0.00 (0.0%)",
+      checkedAt: lowest.lastCheckedAt,
+      isFresh: !row.cycleHealth.stale,
+    };
+  }
+
+  if (diff > 0) {
+    return {
+      label: "Cheaper than Bents",
+      key: "cheaper" as const,
+      diffLabel: `${absDiff}${pctDiff ? ` (${pctDiff})` : ""}`,
+      checkedAt: lowest.lastCheckedAt,
+      isFresh: !row.cycleHealth.stale,
+    };
+  }
+
+  return {
+    label: "Higher than Bents",
+    key: "higher" as const,
+    diffLabel: `${absDiff}${pctDiff ? ` (${pctDiff})` : ""}`,
+    checkedAt: lowest.lastCheckedAt,
+    isFresh: !row.cycleHealth.stale,
   };
 };
 
@@ -361,26 +402,6 @@ const buildPaginationItems = (currentPage: number, totalPages: number) => {
     "ellipsis-right",
     totalPages,
   ] as const;
-};
-
-const competitorBadges = (row: TrackedProductRow) => {
-  const suspicious = row.competitorListings.filter(
-    (c) => c.lastCheckStatus === "suspicious",
-  ).length;
-  const checked = row.competitorListings.filter(
-    (c) => c.lastCheckStatus === "success",
-  ).length;
-  const valid = row.competitorListings.filter(
-    (c) =>
-      c.lastCheckStatus === "success" &&
-      c.competitorCurrentPrice !== null &&
-      c.extractionMetadata?.trust_rejected !== true,
-  );
-  return {
-    hasLowest: valid.length > 0,
-    suspicious,
-    checked,
-  };
 };
 
 const formatDiff = (listing: CompetitorListing) => {
@@ -1364,13 +1385,15 @@ export function ProductsTable({
                     </button>
                   </th>
                 ))}
+                <th className="px-3 py-2">Margin</th>
+                <th className="px-3 py-2">Action</th>
               </tr>
             </thead>
             <tbody>
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={11}
                     className="px-3 py-10 text-center text-sm text-text-secondary"
                   >
                     {loadError
@@ -1410,7 +1433,13 @@ export function ProductsTable({
                   <td className="px-3 py-2">
                     {(() => {
                       const summary = competitorSummary(r);
-                      const badges = competitorBadges(r);
+                      const signal = buyerSignal(r);
+                      const checkedTime = signal.checkedAt
+                        ? new Date(signal.checkedAt).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
+                        : null;
                       return (
                         <>
                           <p className="font-semibold text-slate-900 dark:text-foreground">
@@ -1421,34 +1450,26 @@ export function ProductsTable({
                               {summary.secondary}
                             </p>
                           )}
-                          <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
-                            <span className={`rounded-full px-2 py-0.5 ${monitorabilityTone[r.monitorability.category]}`}>{r.monitorability.label}</span>
-                            <span className={`rounded-full px-2 py-0.5 ${r.sourceHealth.bents.success ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700"}`}>Bents: {r.sourceHealth.bents.success ? "Success" : "Failed"}</span>
-                            <span className={`rounded-full px-2 py-0.5 ${r.sourceHealth.competitors.pending > 0 ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>Competitors: {r.sourceHealth.competitors.success + r.sourceHealth.competitors.failed + r.sourceHealth.competitors.suspicious}/{r.sourceHealth.competitors.total} checked</span>
-                            <span className={`rounded-full px-2 py-0.5 ${r.cycleHealth.partialFailure ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>Cycle sources: {r.cycleHealth.successfulSources}/{r.cycleHealth.totalSources} successful</span>
-                            {r.cycleHealth.stale ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Stale data</span> : null}
-                            {badges.hasLowest && (
+                          <p className="mt-1 text-xs text-text-secondary">
+                            Diff vs Bents: {signal.diffLabel}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
+                            <span
+                              className={`rounded-full px-2 py-0.5 ${buyerSignalTone[signal.key]}`}
+                            >
+                              {signal.label}
+                            </span>
+                            {signal.isFresh && (
                               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">
-                                Lowest valid
+                                Fresh
                               </span>
                             )}
-                            {badges.suspicious > 0 && (
-                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
-                                {badges.suspicious} suspicious
-                              </span>
-                            )}
-                            {badges.checked > 0 && (
-                              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">
-                                {badges.checked} checked
+                            {checkedTime && (
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 dark:bg-surface-hover dark:text-text-secondary">
+                                Checked {checkedTime}
                               </span>
                             )}
                           </div>
-                          {summary.extra && (
-                            <p className="text-xs text-text-muted">
-                              {summary.extra}
-                            </p>
-                          )}
-                          <p className="text-xs text-text-muted">{freshnessLabel(r)} · {r.cycleHealth.lastFullCheckAt ? `Last full cycle success ${new Date(r.cycleHealth.lastFullCheckAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No full cycle success yet"}</p>
                         </>
                       );
                     })()}
@@ -1463,6 +1484,19 @@ export function ProductsTable({
                   </td>
                   <td className="px-3 py-2">
                     <WorkflowChip status={r.actionWorkflowStatus} />
+                  </td>
+                  <td className="px-3 py-2 text-xs text-text-secondary">{marginLabel(r)}</td>
+                  <td className="px-3 py-2">
+                    <Button
+                      type="button"
+                      className="px-2 py-1 text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedId(r.id);
+                      }}
+                    >
+                      Review
+                    </Button>
                   </td>
                 </tr>
                 ))
@@ -1647,6 +1681,14 @@ export function ProductsTable({
                   <p className="mt-2 text-xs font-medium text-sky-700 dark:text-sky-300">
                     {priceSummaryText}
                   </p>
+                  <a
+                    href={selected.bentsProductUrl || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-flex items-center text-xs font-medium text-sky-700 hover:underline dark:text-sky-300"
+                  >
+                    View Bents product ↗
+                  </a>
                 </div>
 
                 {editMode ? (
@@ -1941,7 +1983,7 @@ export function ProductsTable({
                               rel="noreferrer"
                               className="inline-flex items-center rounded-md bg-muted px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-surface-raised dark:text-foreground dark:hover:bg-surface-hover"
                             >
-                              View
+                              View product ↗
                             </a>
                             <Button
                               onClick={() => runRefresh(undefined, [c.id])}
