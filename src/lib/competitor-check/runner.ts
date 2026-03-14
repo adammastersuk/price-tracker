@@ -5,6 +5,7 @@ import {
   insertCompetitorPrice,
   insertPriceHistory,
   updateCompetitorPrice,
+  updateProduct,
   type CompetitorPriceInput,
   getRuntimeSettings
 } from "@/lib/db";
@@ -21,6 +22,7 @@ import {
   upsertAlert
 } from "@/lib/operations";
 import { toPlainObject } from "@/lib/json";
+import { CheckStatus, CompetitorListing } from "@/types/pricing";
 
 export interface RefreshOptions {
   productIds?: string[];
@@ -35,20 +37,39 @@ interface RefreshTarget {
   sku: string;
   productName: string;
   brand: string;
+  costPrice: number | null;
   bentsPrice: number;
-  competitorName: string;
-  competitorUrl: string;
-  mappingId?: string;
-  previousPrice: number | null;
-  previousValidPrice: number | null;
+  bentsUrl: string;
+  competitorMappings: Array<{
+    mappingId?: string;
+    competitorName: string;
+    competitorUrl: string;
+    previousPrice: number | null;
+    previousValidPrice: number | null;
+    lastCheckedAt?: string;
+  }>;
   refreshTier: "default" | "priority";
-  lastCheckedAt?: string;
 }
 
 interface QueuedTarget {
   queueItemId: string;
   runId: string;
   target: RefreshTarget;
+}
+
+interface SourceCheckResult {
+  sourceType: "bents" | "competitor";
+  sourceName: string;
+  url: string;
+  currentPrice: number | null;
+  previousPrice: number | null;
+  stockStatus: CompetitorListing["competitorStockStatus"];
+  success: boolean;
+  status: CheckStatus;
+  checkedAt: string;
+  notes?: string;
+  extractionSource?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RefreshFailure {
@@ -85,7 +106,7 @@ function isImplausibleAgainstBents(bentsPrice: number, competitorPrice: number |
   return competitorPrice < bentsPrice * lowFactor || competitorPrice > bentsPrice * highFactor;
 }
 
-function suspiciousReason(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>, thresholds: { low: number; high: number; }) {
+function suspiciousReason(target: { bentsPrice: number; previousPrice: number | null; previousValidPrice: number | null; competitorUrl: string; }, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>, thresholds: { low: number; high: number; }) {
   const reasons: string[] = [];
   const nextPrice = result.competitor_current_price;
   if (isSuspicious(target.previousPrice, nextPrice, thresholds.high)) {
@@ -121,142 +142,107 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
   const targets: RefreshTarget[] = [];
   for (const product of filtered) {
     const mappings = await getCompetitorPrices(product.id);
-    for (const mapping of mappings) {
-      if (options.competitorListingIds?.length && !options.competitorListingIds.includes(mapping.id)) {
-        continue;
-      }
-      const refreshTier = product.actionWorkflowStatus === "Open" || product.actionWorkflowStatus === "In Review" ? "priority" : "default";
-      const frequencyHours = options.scheduleMode === "priority"
-        ? priorityHours
-        : runtime.scrapeDefaults.defaultRefreshFrequencyHours;
+    const refreshTier = product.actionWorkflowStatus === "Open" || product.actionWorkflowStatus === "In Review" ? "priority" : "default";
+    const frequencyHours = options.scheduleMode === "priority"
+      ? priorityHours
+      : runtime.scrapeDefaults.defaultRefreshFrequencyHours;
 
+    const filteredMappings = mappings.filter((mapping) => {
+      if (options.competitorListingIds?.length && !options.competitorListingIds.includes(mapping.id)) return false;
       if (options.scheduleMode && options.scheduleMode !== "manual") {
-        if (options.scheduleMode === "priority" && refreshTier !== "priority") continue;
-        if (!isDue(mapping.last_checked_at, frequencyHours)) continue;
+        if (options.scheduleMode === "priority" && refreshTier !== "priority") return false;
+        if (!isDue(mapping.last_checked_at, frequencyHours)) return false;
       }
+      return true;
+    });
 
-      targets.push({
-        productId: product.id,
-        sku: product.internalSku,
-        productName: product.productName,
-        brand: product.brand,
-        bentsPrice: product.bentsRetailPrice,
+    if (!filteredMappings.length && !product.bentsProductUrl) {
+      continue;
+    }
+
+    targets.push({
+      productId: product.id,
+      sku: product.internalSku,
+      productName: product.productName,
+      brand: product.brand,
+      costPrice: product.costPrice,
+      bentsPrice: product.bentsRetailPrice,
+      bentsUrl: product.bentsProductUrl,
+      refreshTier,
+      competitorMappings: filteredMappings.map((mapping) => ({
+        mappingId: mapping.id,
         competitorName: mapping.competitor_name,
         competitorUrl: mapping.competitor_url ?? "",
-        mappingId: mapping.id,
         previousPrice: mapping.competitor_current_price,
         previousValidPrice: mapping.competitor_current_price,
-        refreshTier,
         lastCheckedAt: mapping.last_checked_at
-      });
-    }
+      }))
+    });
   }
 
   return targets;
 }
 
-async function saveSuccess(target: RefreshTarget, result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>) {
-  const reasons = suspiciousReason(target, result, {
-    low: runtime.toleranceSettings.suspiciousLowPriceThresholdPercent,
-    high: runtime.toleranceSettings.suspiciousHighPriceThresholdPercent
-  });
-  const suspicious = reasons.length > 0;
-
-  const acceptedCurrentPrice = suspicious ? target.previousValidPrice : result.competitor_current_price;
-  const diff = acceptedCurrentPrice === null
-    ? null
-    : Number((target.bentsPrice - (acceptedCurrentPrice ?? 0)).toFixed(2));
-  const diffPct = acceptedCurrentPrice === null || acceptedCurrentPrice === 0
-    ? null
-    : Number((((target.bentsPrice - acceptedCurrentPrice) / acceptedCurrentPrice) * 100).toFixed(2));
-  const now = new Date().toISOString();
-  const pricingStatus = derivePricingStatus({
-    competitorCurrentPrice: acceptedCurrentPrice,
-    competitorPromoPrice: result.competitor_promo_price,
-    competitorStockStatus: result.competitor_stock_status as "In Stock" | "Low Stock" | "Out of Stock" | "Unknown",
-    priceDifferencePercent: diffPct
-  }, runtime.toleranceSettings.inLinePricingTolerancePercent);
-
-  const payload: CompetitorPriceInput = {
-    product_id: target.productId,
-    competitor_name: target.competitorName || "Unknown competitor",
-    competitor_url: target.competitorUrl,
-    competitor_current_price: acceptedCurrentPrice ?? undefined,
-    competitor_promo_price: result.competitor_promo_price ?? undefined,
-    competitor_was_price: (suspicious ? target.previousValidPrice : result.competitor_was_price) ?? undefined,
-    competitor_stock_status: result.competitor_stock_status,
-    last_checked_at: now,
-    price_difference_gbp: diff ?? undefined,
-    price_difference_percent: diffPct ?? undefined,
-    pricing_status: pricingStatus,
-    last_check_status: suspicious ? "suspicious" : "success",
-    check_error_message: suspicious
-      ? `Suspicious extraction detected. Previous valid price retained for review. ${reasons.join(" ")}`
-      : "",
-    raw_price_text: result.raw_price_text,
-    extraction_source: result.extraction_source,
-    suspicious_change_flag: suspicious,
-    extraction_metadata: {
-      ...(result.metadata ?? {}),
-      trust_rejected: suspicious,
-      accepted_current_price: acceptedCurrentPrice,
-      extracted_current_price: result.competitor_current_price,
-      trust_warnings: reasons,
-      previous_valid_price: target.previousValidPrice
-    }
-  };
-
-  let mappingId = target.mappingId;
-  if (target.mappingId) {
-    await updateCompetitorPrice(target.mappingId, payload);
-  } else {
-    const inserted = await insertCompetitorPrice(payload);
-    mappingId = inserted[0]?.id;
+async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promise<SourceCheckResult> {
+  if (!target.bentsUrl) {
+    return {
+      sourceType: "bents",
+      sourceName: "Bents",
+      url: "",
+      currentPrice: target.bentsPrice,
+      previousPrice: target.bentsPrice,
+      stockStatus: "Unknown",
+      success: false,
+      status: "failed",
+      checkedAt,
+      notes: "Missing Bents product URL"
+    };
   }
 
   try {
-    await insertPriceHistory({
-      product_id: target.productId,
-      competitor_name: target.competitorName || "Unknown competitor",
-      competitor_url: target.competitorUrl,
-      competitor_price_id: mappingId,
-      price: acceptedCurrentPrice ?? undefined,
-      current_price: acceptedCurrentPrice ?? undefined,
-      promo_price: result.competitor_promo_price ?? undefined,
-      was_price: (suspicious ? target.previousValidPrice : result.competitor_was_price) ?? undefined,
-      checked_at: now,
-      captured_at: now,
-      last_check_status: suspicious ? "suspicious" : "success",
-      suspicious_change_flag: suspicious,
-      extraction_source: result.extraction_source,
-      extraction_metadata: {
-        ...(result.metadata ?? {}),
-        trust_rejected: suspicious,
-        trust_warnings: reasons
-      }
+    const adapter = selectAdapter(target.bentsUrl);
+    const result = await adapter.fetchPriceSignal({
+      sku: target.sku,
+      competitorUrl: target.bentsUrl,
+      productName: target.productName,
+      brand: target.brand
     });
+
+    return {
+      sourceType: "bents",
+      sourceName: "Bents",
+      url: target.bentsUrl,
+      currentPrice: result.competitor_current_price,
+      previousPrice: target.bentsPrice,
+      stockStatus: (result.competitor_stock_status as SourceCheckResult["stockStatus"]) ?? "Unknown",
+      success: result.competitor_current_price !== null,
+      status: result.competitor_current_price === null ? "failed" : "success",
+      checkedAt,
+      notes: result.competitor_current_price === null ? "Bents price token not found; preserving last known Bents price" : "",
+      extractionSource: result.extraction_source,
+      metadata: result.metadata
+    };
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn("Failed to insert price history", error);
+    const reason = error instanceof Error ? error.message : "Unknown Bents check failure";
+    return {
+      sourceType: "bents",
+      sourceName: "Bents",
+      url: target.bentsUrl,
+      currentPrice: target.bentsPrice,
+      previousPrice: target.bentsPrice,
+      stockStatus: "Unknown",
+      success: false,
+      status: "failed",
+      checkedAt,
+      notes: reason
+    };
   }
-
-  if (suspicious) {
-    await upsertAlert({
-      dedupe_key: `suspicious:${target.productId}:${target.competitorName}`,
-      product_id: target.productId,
-      competitor_name: target.competitorName,
-      reason: "Suspicious extraction",
-      context: { reasons, competitorUrl: target.competitorUrl, extracted: result.competitor_current_price, accepted: acceptedCurrentPrice }
-    });
-  }
-
-  return { suspicious, mappingId, acceptedCurrentPrice, pricingStatus };
 }
 
-async function saveFailure(target: RefreshTarget, reason: string, diagnostics?: Record<string, unknown>) {
-  if (!target.mappingId) return;
+async function saveFailure(target: RefreshTarget, mappingId: string | undefined, competitorName: string, competitorUrl: string, reason: string, diagnostics?: Record<string, unknown>) {
+  if (!mappingId) return;
   const selectedAdapter = typeof diagnostics?.selected_adapter === "string" ? diagnostics.selected_adapter : "failed";
-  await updateCompetitorPrice(target.mappingId, {
+  await updateCompetitorPrice(mappingId, {
     last_checked_at: new Date().toISOString(),
     last_check_status: "failed",
     check_error_message: reason,
@@ -270,12 +256,253 @@ async function saveFailure(target: RefreshTarget, reason: string, diagnostics?: 
   });
 
   await upsertAlert({
-    dedupe_key: `failed-check:${target.productId}:${target.competitorName}`,
+    dedupe_key: `failed-check:${target.productId}:${competitorName}`,
     product_id: target.productId,
-    competitor_name: target.competitorName,
+    competitor_name: competitorName,
     reason: "Repeated failed checks",
-    context: { reason, competitorUrl: target.competitorUrl }
+    context: { reason, competitorUrl }
   });
+}
+
+async function checkCompetitorSource(
+  target: RefreshTarget,
+  mapping: RefreshTarget["competitorMappings"][number],
+  runtime: Awaited<ReturnType<typeof getRuntimeSettings>>,
+  checkedAt: string
+): Promise<{ result: SourceCheckResult; failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; }> {
+  if (!mapping.competitorUrl) {
+    const reason = "Missing competitor URL";
+    await saveFailure(target, mapping.mappingId, mapping.competitorName, mapping.competitorUrl, reason);
+    return {
+      result: {
+        sourceType: "competitor",
+        sourceName: mapping.competitorName,
+        url: mapping.competitorUrl,
+        currentPrice: mapping.previousValidPrice,
+        previousPrice: mapping.previousValidPrice,
+        stockStatus: "Unknown",
+        success: false,
+        status: "failed",
+        checkedAt,
+        notes: reason
+      },
+      failure: { productId: target.productId, sku: target.sku, competitorUrl: mapping.competitorUrl, reason },
+      succeeded: false
+    };
+  }
+
+  try {
+    const adapter = selectAdapter(mapping.competitorUrl);
+    const fetched = await adapter.fetchPriceSignal({
+      sku: target.sku,
+      competitorUrl: mapping.competitorUrl,
+      productName: target.productName,
+      brand: target.brand
+    });
+
+    const reasons = suspiciousReason(
+      {
+        bentsPrice: target.bentsPrice,
+        previousPrice: mapping.previousPrice,
+        previousValidPrice: mapping.previousValidPrice,
+        competitorUrl: mapping.competitorUrl
+      },
+      fetched,
+      {
+        low: runtime.toleranceSettings.suspiciousLowPriceThresholdPercent,
+        high: runtime.toleranceSettings.suspiciousHighPriceThresholdPercent
+      }
+    );
+
+    const suspicious = reasons.length > 0;
+    const acceptedCurrentPrice = suspicious ? mapping.previousValidPrice : fetched.competitor_current_price;
+    const diff = acceptedCurrentPrice === null ? null : Number((target.bentsPrice - (acceptedCurrentPrice ?? 0)).toFixed(2));
+    const diffPct = acceptedCurrentPrice === null || acceptedCurrentPrice === 0
+      ? null
+      : Number((((target.bentsPrice - acceptedCurrentPrice) / acceptedCurrentPrice) * 100).toFixed(2));
+    const pricingStatus = derivePricingStatus({
+      competitorCurrentPrice: acceptedCurrentPrice,
+      competitorPromoPrice: fetched.competitor_promo_price,
+      competitorStockStatus: fetched.competitor_stock_status as "In Stock" | "Low Stock" | "Out of Stock" | "Unknown",
+      priceDifferencePercent: diffPct
+    }, runtime.toleranceSettings.inLinePricingTolerancePercent);
+
+    const payload: CompetitorPriceInput = {
+      product_id: target.productId,
+      competitor_name: mapping.competitorName || "Unknown competitor",
+      competitor_url: mapping.competitorUrl,
+      competitor_current_price: acceptedCurrentPrice ?? undefined,
+      competitor_promo_price: fetched.competitor_promo_price ?? undefined,
+      competitor_was_price: (suspicious ? mapping.previousValidPrice : fetched.competitor_was_price) ?? undefined,
+      competitor_stock_status: fetched.competitor_stock_status,
+      last_checked_at: checkedAt,
+      price_difference_gbp: diff ?? undefined,
+      price_difference_percent: diffPct ?? undefined,
+      pricing_status: pricingStatus,
+      last_check_status: suspicious ? "suspicious" : "success",
+      check_error_message: suspicious
+        ? `Suspicious extraction detected. Previous valid price retained for review. ${reasons.join(" ")}`
+        : "",
+      raw_price_text: fetched.raw_price_text,
+      extraction_source: fetched.extraction_source,
+      suspicious_change_flag: suspicious,
+      extraction_metadata: {
+        ...(fetched.metadata ?? {}),
+        trust_rejected: suspicious,
+        accepted_current_price: acceptedCurrentPrice,
+        extracted_current_price: fetched.competitor_current_price,
+        trust_warnings: reasons,
+        previous_valid_price: mapping.previousValidPrice
+      }
+    };
+
+    let mappingId = mapping.mappingId;
+    if (mapping.mappingId) {
+      await updateCompetitorPrice(mapping.mappingId, payload);
+    } else {
+      const inserted = await insertCompetitorPrice(payload);
+      mappingId = inserted[0]?.id;
+    }
+
+    try {
+      await insertPriceHistory({
+        product_id: target.productId,
+        competitor_name: mapping.competitorName || "Unknown competitor",
+        competitor_url: mapping.competitorUrl,
+        competitor_price_id: mappingId,
+        price: acceptedCurrentPrice ?? undefined,
+        current_price: acceptedCurrentPrice ?? undefined,
+        promo_price: fetched.competitor_promo_price ?? undefined,
+        was_price: (suspicious ? mapping.previousValidPrice : fetched.competitor_was_price) ?? undefined,
+        checked_at: checkedAt,
+        captured_at: checkedAt,
+        last_check_status: suspicious ? "suspicious" : "success",
+        suspicious_change_flag: suspicious,
+        extraction_source: fetched.extraction_source,
+        extraction_metadata: {
+          ...(fetched.metadata ?? {}),
+          trust_rejected: suspicious,
+          trust_warnings: reasons
+        }
+      });
+    } catch (error) {
+      console.warn("Failed to insert price history", error);
+    }
+
+    if (suspicious) {
+      await upsertAlert({
+        dedupe_key: `suspicious:${target.productId}:${mapping.competitorName}`,
+        product_id: target.productId,
+        competitor_name: mapping.competitorName,
+        reason: "Suspicious extraction",
+        context: { reasons, competitorUrl: mapping.competitorUrl, extracted: fetched.competitor_current_price, accepted: acceptedCurrentPrice }
+      });
+    }
+
+    return {
+      result: {
+        sourceType: "competitor",
+        sourceName: mapping.competitorName,
+        url: mapping.competitorUrl,
+        currentPrice: acceptedCurrentPrice,
+        previousPrice: mapping.previousPrice,
+        stockStatus: (fetched.competitor_stock_status as SourceCheckResult["stockStatus"]) ?? "Unknown",
+        success: true,
+        status: suspicious ? "suspicious" : "success",
+        checkedAt,
+        notes: suspicious ? reasons.join(" ") : "",
+        extractionSource: fetched.extraction_source,
+        metadata: fetched.metadata
+      },
+      suspicious,
+      succeeded: true
+    };
+  } catch (error) {
+    const reason = (error as Error).message;
+    const selectedAdapter = selectAdapter(mapping.competitorUrl);
+    const parsedHostname = (() => {
+      try {
+        return new URL(mapping.competitorUrl).hostname;
+      } catch {
+        return "";
+      }
+    })();
+    const diagnostics = {
+      ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
+      parsed_hostname: parsedHostname,
+      selected_adapter: selectedAdapter.name
+    };
+
+    await saveFailure(target, mapping.mappingId, mapping.competitorName, mapping.competitorUrl, reason, diagnostics);
+    return {
+      result: {
+        sourceType: "competitor",
+        sourceName: mapping.competitorName,
+        url: mapping.competitorUrl,
+        currentPrice: mapping.previousValidPrice,
+        previousPrice: mapping.previousValidPrice,
+        stockStatus: "Unknown",
+        success: false,
+        status: "failed",
+        checkedAt,
+        notes: reason,
+        metadata: diagnostics
+      },
+      failure: { productId: target.productId, sku: target.sku, competitorUrl: mapping.competitorUrl, reason },
+      succeeded: false
+    };
+  }
+}
+
+async function updateProductFromCycle(target: RefreshTarget, bentsResult: SourceCheckResult, sourceResults: SourceCheckResult[]) {
+  const latestBentsPrice = bentsResult.success && bentsResult.currentPrice !== null
+    ? bentsResult.currentPrice
+    : target.bentsPrice;
+  const marginPercent = target.costPrice === null || latestBentsPrice <= 0
+    ? null
+    : Number((((latestBentsPrice - target.costPrice) / latestBentsPrice) * 100).toFixed(2));
+
+  await updateProduct(target.productId, {
+    bents_price: latestBentsPrice,
+    margin_percent: marginPercent ?? undefined
+  });
+
+  if (!bentsResult.success) {
+    await upsertAlert({
+      dedupe_key: `bents-source-failed:${target.productId}`,
+      product_id: target.productId,
+      reason: "Bents source check failed",
+      context: { bentsUrl: target.bentsUrl, reason: bentsResult.notes, latestKnownPrice: target.bentsPrice, sourceResults }
+    });
+  }
+}
+
+async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; sourceResults: SourceCheckResult[]; }> {
+  const checkedAt = new Date().toISOString();
+  const bentsResult = await checkBentsSource(target, checkedAt);
+  const sourceResults: SourceCheckResult[] = [bentsResult];
+
+  const failures: RefreshFailure[] = [];
+  let hadCompetitorSuccess = false;
+  let suspicious = false;
+
+  for (const mapping of target.competitorMappings) {
+    const checked = await checkCompetitorSource(target, mapping, runtime, checkedAt);
+    sourceResults.push(checked.result);
+    if (checked.failure) failures.push(checked.failure);
+    if (checked.succeeded) hadCompetitorSuccess = true;
+    if (checked.suspicious) suspicious = true;
+  }
+
+  await updateProductFromCycle(target, bentsResult, sourceResults);
+
+  const failedReason = failures[0]?.reason ?? (!bentsResult.success ? (bentsResult.notes ?? "Bents source check failed") : undefined);
+  return {
+    sourceResults,
+    failure: failedReason ? { productId: target.productId, sku: target.sku, competitorUrl: failures[0]?.competitorUrl ?? target.bentsUrl, reason: failedReason } : undefined,
+    suspicious,
+    succeeded: bentsResult.success || hadCompetitorSuccess
+  };
 }
 
 export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Promise<{ runId?: string; queued: number; total: number; }> {
@@ -285,7 +512,7 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
     trigger_source: options.triggerSource ?? "manual",
     schedule_mode: options.scheduleMode ?? "manual",
     total: targets.length,
-    metadata: { targetCount: targets.length, pending: targets.length }
+    metadata: { targetCount: targets.length, pending: targets.length, sourceType: "product_cycle" }
   });
 
   if (runId) {
@@ -293,10 +520,9 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
       await logRefreshRunItem({
         run_id: runId,
         product_id: target.productId,
-        competitor_price_id: target.mappingId,
-        competitor_name: target.competitorName,
-        competitor_url: target.competitorUrl,
         status: "queued",
+        competitor_name: "Bents + competitors",
+        competitor_url: target.bentsUrl,
         metadata: { target }
       });
     }
@@ -318,55 +544,13 @@ async function readQueuedTarget(runId: string): Promise<QueuedTarget | null> {
       sku: target.sku ?? "Unknown SKU",
       productName: target.productName ?? "Unknown product",
       brand: target.brand ?? "Unknown",
+      costPrice: typeof target.costPrice === "number" ? target.costPrice : null,
       bentsPrice: Number(target.bentsPrice ?? 0),
-      competitorName: target.competitorName ?? row.competitor_name ?? "Unknown competitor",
-      competitorUrl: target.competitorUrl ?? row.competitor_url ?? "",
-      mappingId: target.mappingId ?? row.competitor_price_id ?? undefined,
-      previousPrice: typeof target.previousPrice === "number" ? target.previousPrice : null,
-      previousValidPrice: typeof target.previousValidPrice === "number" ? target.previousValidPrice : null,
+      bentsUrl: target.bentsUrl ?? row.competitor_url ?? "",
       refreshTier: target.refreshTier === "priority" ? "priority" : "default",
-      lastCheckedAt: target.lastCheckedAt
+      competitorMappings: Array.isArray(target.competitorMappings) ? target.competitorMappings : []
     }
   };
-}
-
-
-
-async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; }> {
-  if (!target.competitorUrl) {
-    const reason = "Missing competitor URL";
-    await saveFailure(target, reason);
-    return { failure: { productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason }, succeeded: false };
-  }
-
-  try {
-    const adapter = selectAdapter(target.competitorUrl);
-    const result = await adapter.fetchPriceSignal({
-      sku: target.sku,
-      competitorUrl: target.competitorUrl,
-      productName: target.productName,
-      brand: target.brand
-    });
-    const saveResult = await saveSuccess(target, result, runtime);
-    return { suspicious: saveResult.suspicious, succeeded: true };
-  } catch (error) {
-    const reason = (error as Error).message;
-    const selectedAdapter = selectAdapter(target.competitorUrl);
-    const parsedHostname = (() => {
-      try {
-        return new URL(target.competitorUrl).hostname;
-      } catch {
-        return "";
-      }
-    })();
-    const diagnostics = {
-      ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
-      parsed_hostname: parsedHostname,
-      selected_adapter: selectedAdapter.name
-    };
-    await saveFailure(target, reason, diagnostics);
-    return { failure: { productId: target.productId, sku: target.sku, competitorUrl: target.competitorUrl, reason }, succeeded: false };
-  }
 }
 
 export async function runCompetitorRefreshInline(options: RefreshOptions = {}): Promise<RefreshSummary> {
@@ -432,64 +616,24 @@ export async function processOneQueuedRefresh(runId: string): Promise<RefreshSum
   const started = Date.now();
   const failures: RefreshFailure[] = [];
 
-  if (!queued.target.competitorUrl) {
-    const reason = "Missing competitor URL";
-    failures.push({ productId: queued.target.productId, sku: queued.target.sku, competitorUrl: queued.target.competitorUrl, reason });
-    await saveFailure(queued.target, reason);
-    await updateRefreshRunItem(queued.queueItemId, {
-      status: "missing_url",
-      error_message: reason,
-      checked_at: new Date().toISOString(),
-      duration_ms: Date.now() - started
-    });
-    await updateRunCounts(runId, { failed: 1, processed: 1 });
-  } else {
-    try {
-      const adapter = selectAdapter(queued.target.competitorUrl);
-      const result = await adapter.fetchPriceSignal({
-        sku: queued.target.sku,
-        competitorUrl: queued.target.competitorUrl,
-        productName: queued.target.productName,
-        brand: queued.target.brand
-      });
-      const saveResult = await saveSuccess(queued.target, result, runtime);
-      await updateRefreshRunItem(queued.queueItemId, {
-        status: saveResult.suspicious ? "suspicious" : "success",
-        suspicious: saveResult.suspicious,
-        extraction_source: result.extraction_source,
-        competitor_price_id: saveResult.mappingId,
-        checked_at: new Date().toISOString(),
-        duration_ms: Date.now() - started,
-        metadata: { pricingStatus: saveResult.pricingStatus, acceptedCurrentPrice: saveResult.acceptedCurrentPrice }
-      });
-      await updateRunCounts(runId, { succeeded: 1, suspicious: saveResult.suspicious ? 1 : 0, processed: 1 });
-    } catch (error) {
-      const reason = (error as Error).message;
-      const selectedAdapter = selectAdapter(queued.target.competitorUrl);
-      const parsedHostname = (() => {
-        try {
-          return new URL(queued.target.competitorUrl).hostname;
-        } catch {
-          return "";
-        }
-      })();
-      const diagnostics = {
-        ...(error instanceof AdapterExtractionError ? error.diagnostics : {}),
-        parsed_hostname: parsedHostname,
-        selected_adapter: selectedAdapter.name
-      };
-      failures.push({ productId: queued.target.productId, sku: queued.target.sku, competitorUrl: queued.target.competitorUrl, reason });
-      await saveFailure(queued.target, reason, diagnostics);
-      await updateRefreshRunItem(queued.queueItemId, {
-        status: "failed",
-        error_message: reason,
-        checked_at: new Date().toISOString(),
-        duration_ms: Date.now() - started,
-        metadata: diagnostics
-      });
-      await updateRunCounts(runId, { failed: 1, processed: 1 });
-    }
-  }
+  const result = await processTarget(queued.target, runtime);
+  if (result.failure) failures.push(result.failure);
+
+  await updateRefreshRunItem(queued.queueItemId, {
+    status: result.succeeded ? (result.suspicious ? "suspicious" : "success") : "failed",
+    suspicious: !!result.suspicious,
+    checked_at: new Date().toISOString(),
+    duration_ms: Date.now() - started,
+    error_message: result.failure?.reason,
+    metadata: { sourceResults: result.sourceResults }
+  });
+
+  await updateRunCounts(runId, {
+    succeeded: result.succeeded ? 1 : 0,
+    failed: result.succeeded ? 0 : 1,
+    suspicious: result.suspicious ? 1 : 0,
+    processed: 1
+  });
 
   const [run, pendingRows] = await Promise.all([getRefreshRun(runId), listQueuedRefreshRunItems(runId, 1)]);
   const pending = pendingRows.length > 0 ? (run ? Math.max(run.total - run.processed, 0) : 1) : 0;

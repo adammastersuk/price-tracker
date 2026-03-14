@@ -66,6 +66,7 @@ function parseCsv(csvText: string): ParseResult {
     if (!row.sku) missingFields.push("SKU");
     if (!row.productName) missingFields.push("product_name");
     if (!Number.isFinite(row.bentsPrice)) missingFields.push("Bents_price");
+    if (!row.bentsUrl) missingFields.push("Bents_URL");
     if (!row.competitorName) missingFields.push("competitor_name");
     if (!row.competitorUrl) missingFields.push("competitor_URL");
     if (missingFields.length > 0) {
@@ -168,7 +169,8 @@ export async function POST(request: NextRequest) {
       unmatchedBuyers: [...unmatchedBuyers],
       unmatchedDepartments: [...unmatchedDepartments],
       unmatchedCompetitors: [...unmatchedCompetitors],
-      previewRows: [...rowErrors, ...rowWarnings].slice(0, 5)
+      previewRows: [...rowErrors, ...rowWarnings].slice(0, 5),
+      monitorableRows: prepared.filter((row) => !row.hasError).length
     };
 
     if (preview) {
