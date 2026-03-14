@@ -11,7 +11,6 @@ import {
 import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import {
   PricingStatusChip,
-  WorkflowChip,
 } from "@/components/features/status-chip";
 import {
   defaultFilters,
@@ -73,8 +72,7 @@ type SortKey =
   | "bents"
   | "competitor"
   | "diff"
-  | "status"
-  | "workflow";
+  | "status";
 type SortDirection = "asc" | "desc";
 
 const rowsPerPageOptions = [10, 20, 50] as const;
@@ -102,13 +100,21 @@ const buyerSignalTone = {
   inline: "bg-sky-100 text-sky-800",
 } as const;
 
-const workflowOptions = [
-  "Open",
-  "Monitoring",
-  "Reviewed",
-  "No Action",
-  "Closed",
-] as const;
+const checkedAtPill = (checkedAt: string | null) => {
+  if (!checkedAt) return null;
+  const checkedDate = new Date(checkedAt);
+  const isOlderThanDay = Date.now() - checkedDate.getTime() > 24 * 60 * 60 * 1000;
+  const label = isOlderThanDay
+    ? `Checked ${checkedDate.toLocaleDateString([], { day: "2-digit", month: "short" })}, ${checkedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+    : `Checked ${checkedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+
+  return {
+    label,
+    tone: isOlderThanDay
+      ? "bg-rose-100 text-rose-700"
+      : "bg-emerald-100 text-emerald-800",
+  };
+};
 
 interface SavedViewState {
   search: string;
@@ -332,7 +338,6 @@ const buyerSignal = (row: TrackedProductRow) => {
       key: "inline" as const,
       diffLabel: "No difference available",
       checkedAt: row.lastCheckedAt,
-      isFresh: !row.cycleHealth.stale,
     };
   }
 
@@ -349,7 +354,6 @@ const buyerSignal = (row: TrackedProductRow) => {
       key: "inline" as const,
       diffLabel: "£0.00 (0.0%)",
       checkedAt: lowest.lastCheckedAt,
-      isFresh: !row.cycleHealth.stale,
     };
   }
 
@@ -359,7 +363,6 @@ const buyerSignal = (row: TrackedProductRow) => {
       key: "cheaper" as const,
       diffLabel: `${absDiff}${pctDiff ? ` (${pctDiff})` : ""}`,
       checkedAt: lowest.lastCheckedAt,
-      isFresh: !row.cycleHealth.stale,
     };
   }
 
@@ -368,7 +371,6 @@ const buyerSignal = (row: TrackedProductRow) => {
     key: "higher" as const,
     diffLabel: `${absDiff}${pctDiff ? ` (${pctDiff})` : ""}`,
     checkedAt: lowest.lastCheckedAt,
-    isFresh: !row.cycleHealth.stale,
   };
 };
 
@@ -464,12 +466,8 @@ export function ProductsTable({
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [refreshMessage, setRefreshMessage] = useState("");
-  const [bulkMessage, setBulkMessage] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
-  const [bulkOwner, setBulkOwner] = useState("");
-  const [bulkWorkflowStatus, setBulkWorkflowStatus] =
-    useState<(typeof workflowOptions)[number]>("Open");
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
@@ -487,6 +485,7 @@ export function ProductsTable({
   const [savedViewName, setSavedViewName] = useState("");
   const [activeSavedViewId, setActiveSavedViewId] = useState<string>("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [cycleHealthExpanded, setCycleHealthExpanded] = useState(false);
   const [rowsPerPage, setRowsPerPage] = useState<number>(defaultRowsPerPage);
   const normalizedSelectedParam = (initialSelectedProductParam ?? "")
     .trim()
@@ -577,11 +576,6 @@ export function ProductsTable({
           );
         case "status":
           return direction * a.pricingStatus.localeCompare(b.pricingStatus);
-        case "workflow":
-          return (
-            direction *
-            a.actionWorkflowStatus.localeCompare(b.actionWorkflowStatus)
-          );
         default:
           return 0;
       }
@@ -655,6 +649,10 @@ export function ProductsTable({
     () => rows.find((r) => r.id === selectedId) ?? null,
     [rows, selectedId],
   );
+
+  useEffect(() => {
+    setCycleHealthExpanded(false);
+  }, [selected?.id]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -758,9 +756,7 @@ export function ProductsTable({
       const valid = new Set(rows.map((row) => row.id));
       const next = prev.filter((id) => valid.has(id));
       if (next.length !== prev.length) {
-        setBulkMessage(
-          `Selection updated: ${prev.length - next.length} row(s) are no longer available.`,
-        );
+        setRefreshMessage(`Selection updated: ${prev.length - next.length} row(s) are no longer available.`);
       }
       return next;
     });
@@ -1006,47 +1002,6 @@ export function ProductsTable({
     URL.revokeObjectURL(url);
   };
 
-  const runBulkAction = async (
-    action: "assign_owner" | "set_workflow_status" | "mark_reviewed",
-  ) => {
-    if (!selectedIds.length) return;
-    if (
-      (action === "set_workflow_status" || action === "mark_reviewed") &&
-      !window.confirm(
-        `Apply this ${action === "mark_reviewed" ? "reviewed shortcut" : "workflow status"} update to ${selectedIds.length} product(s)?`,
-      )
-    ) {
-      return;
-    }
-
-    setBulkBusy(true);
-    setBulkMessage("");
-    try {
-      const response = await fetch("/api/products/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action,
-          productIds: selectedIds,
-          owner: bulkOwner,
-          workflowStatus:
-            action === "mark_reviewed" ? "Reviewed" : bulkWorkflowStatus,
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setBulkMessage(payload.error ?? "Bulk action failed.");
-        return;
-      }
-      setBulkMessage(
-        `Updated ${payload.data?.updated ?? selectedIds.length} row(s) successfully.`,
-      );
-      await onRefreshDone();
-    } finally {
-      setBulkBusy(false);
-    }
-  };
-
   const runBulkRefresh = async () => {
     if (!selectedIds.length) return;
     setBulkBusy(true);
@@ -1226,7 +1181,7 @@ export function ProductsTable({
           <MultiSelectFilter
             label="Statuses"
             allLabel="All statuses"
-            options={[...new Set([...values.statuses, ...values.workflows])]}
+            options={values.statuses}
             selected={filters.statuses}
             onChange={(statuses) =>
               setFilters((prev) => ({ ...prev, statuses }))
@@ -1269,60 +1224,6 @@ export function ProductsTable({
             >
               Export selected
             </Button>
-            <div className="flex items-center gap-2">
-              <Select
-                value={bulkOwner}
-                onChange={(e) => setBulkOwner(e.target.value)}
-              >
-                <option value="">Select owner</option>
-                {values.buyers.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </Select>
-              <Input
-                value={bulkOwner}
-                onChange={(e) => setBulkOwner(e.target.value)}
-                placeholder="Or type owner"
-                className="w-40"
-              />
-              <Button
-                onClick={() => runBulkAction("assign_owner")}
-                disabled={!bulkOwner.trim() || bulkBusy}
-              >
-                Assign owner
-              </Button>
-            </div>
-            <div className="flex items-center gap-2">
-              <Select
-                value={bulkWorkflowStatus}
-                onChange={(e) =>
-                  setBulkWorkflowStatus(
-                    e.target.value as (typeof workflowOptions)[number],
-                  )
-                }
-              >
-                {workflowOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                onClick={() => runBulkAction("set_workflow_status")}
-                disabled={bulkBusy}
-              >
-                Set workflow status
-              </Button>
-              <Button
-                className="bg-emerald-700"
-                onClick={() => runBulkAction("mark_reviewed")}
-                disabled={bulkBusy}
-              >
-                Mark reviewed
-              </Button>
-            </div>
             <Button
               className="bg-slate-500"
               onClick={() => setSelectedIds([])}
@@ -1335,11 +1236,6 @@ export function ProductsTable({
       )}
       {refreshMessage && (
         <p className="text-sm text-slate-700 dark:text-foreground">{refreshMessage}</p>
-      )}
-      {bulkMessage && (
-        <p className="text-sm text-slate-700 dark:text-foreground">
-          {bulkMessage}
-        </p>
       )}
       {loadError && (
         <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -1372,8 +1268,7 @@ export function ProductsTable({
                     ["Competitor", "competitor"],
                     ["Diff", "diff"],
                     ["Status", "status"],
-                    ["Workflow", "workflow"],
-                  ] as Array<[string, SortKey]>
+                                      ] as Array<[string, SortKey]>
                 ).map(([label, key]) => (
                   <th key={key} className="px-3 py-2">
                     <button
@@ -1393,7 +1288,7 @@ export function ProductsTable({
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={10}
                     className="px-3 py-10 text-center text-sm text-text-secondary"
                   >
                     {loadError
@@ -1434,12 +1329,7 @@ export function ProductsTable({
                     {(() => {
                       const summary = competitorSummary(r);
                       const signal = buyerSignal(r);
-                      const checkedTime = signal.checkedAt
-                        ? new Date(signal.checkedAt).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
-                        : null;
+                      const checkedPill = checkedAtPill(signal.checkedAt);
                       return (
                         <>
                           <p className="font-semibold text-slate-900 dark:text-foreground">
@@ -1459,14 +1349,9 @@ export function ProductsTable({
                             >
                               {signal.label}
                             </span>
-                            {signal.isFresh && (
-                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">
-                                Fresh
-                              </span>
-                            )}
-                            {checkedTime && (
-                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 dark:bg-surface-hover dark:text-text-secondary">
-                                Checked {checkedTime}
+                            {checkedPill && (
+                              <span className={`rounded-full px-2 py-0.5 ${checkedPill.tone}`}>
+                                {checkedPill.label}
                               </span>
                             )}
                           </div>
@@ -1482,8 +1367,18 @@ export function ProductsTable({
                   <td className="px-3 py-2">
                     <PricingStatusChip status={r.pricingStatus} />
                   </td>
+                  <td className="px-3 py-2 text-xs text-text-secondary">{marginLabel(r)}</td>
                   <td className="px-3 py-2">
-                    <WorkflowChip status={r.actionWorkflowStatus} />
+                    <Button
+                      type="button"
+                      className="px-2 py-1 text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedId(r.id);
+                      }}
+                    >
+                      View
+                    </Button>
                   </td>
                   <td className="px-3 py-2 text-xs text-text-secondary">{marginLabel(r)}</td>
                   <td className="px-3 py-2">
@@ -1610,14 +1505,15 @@ export function ProductsTable({
                       ✕
                     </button>
                   </div>
-                  <div className="text-xs text-text-secondary">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
                     <p>
                       <b>Margin:</b> {marginLabel(selected)}
                     </p>
-                    <p>
-                      <b>Latest check:</b>{" "}
-                      {new Date(selected.lastCheckedAt).toLocaleString()}
-                    </p>
+                    {checkedAtPill(selected.lastCheckedAt) && (
+                      <span className={`rounded-full px-2 py-0.5 ${checkedAtPill(selected.lastCheckedAt)?.tone}`}>
+                        {checkedAtPill(selected.lastCheckedAt)?.label}
+                      </span>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <Button
@@ -1627,38 +1523,30 @@ export function ProductsTable({
                     >
                       Refresh
                     </Button>
-                    <Button
-                      className="bg-slate-700 px-2.5 py-1 text-xs"
-                      onClick={() => setEditMode((v) => !v)}
-                    >
-                      {editMode ? "Cancel" : "Edit"}
-                    </Button>
-                    <Button
-                      className="bg-rose-700 px-2.5 py-1 text-xs"
-                      onClick={deleteProductRow}
-                    >
-                      Delete
-                    </Button>
                   </div>
                 </div>
-                <p className="text-sm text-text-secondary">
-                  Decision support only: review competitor signals alongside
-                  margin, stock, supplier context and commercial judgement.
-                  Competitor prices are reference signals, not repricing
-                  instructions.
-                </p>
 
-
-
-                <div className="rounded-lg border bg-card p-3 text-sm">
-                  <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Cycle health</p>
-                  <div className="mt-2 space-y-1 text-xs text-text-secondary">
-                    <p>{selected.monitorability.label}{selected.monitorability.reasons.length ? ` · ${selected.monitorability.reasons.join("; ")}` : ""}</p>
-                    <p>Bents (this product): {selected.sourceHealth.bents.status} {selected.sourceHealth.bents.checkedAt ? `(${new Date(selected.sourceHealth.bents.checkedAt).toLocaleString()})` : ""}</p>
-                    <p>Competitors (this product): {selected.sourceHealth.competitors.success} success / {selected.sourceHealth.competitors.failed} failed / {selected.sourceHealth.competitors.total} total</p>
-                    <p>Cycle sources successful: {selected.cycleHealth.successfulSources}/{selected.cycleHealth.totalSources}</p>
-                    <p>{selected.cycleHealth.partialFailure ? "Partial failure" : "No partial failure"} · {selected.cycleHealth.stale ? "Stale data" : "Fresh"}</p>
-                    <p className="text-[11px] text-text-muted">Note: Settings scraper health is global adapter reliability; this panel is per-product result history.</p>
+                <div className="rounded-lg border bg-card p-2.5 text-xs">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded-full border border-border bg-muted/40 px-3 py-1.5 text-left font-medium text-slate-700 hover:bg-muted dark:text-foreground"
+                    aria-expanded={cycleHealthExpanded}
+                    onClick={() => setCycleHealthExpanded((prev) => !prev)}
+                  >
+                    <span>Cycle health</span>
+                    <span className="text-[11px] text-text-secondary">
+                      {cycleHealthExpanded ? "Hide" : "Show"} details
+                    </span>
+                  </button>
+                  <div className={`grid transition-all duration-300 ease-out ${cycleHealthExpanded ? "grid-rows-[1fr] opacity-100 mt-2" : "grid-rows-[0fr] opacity-0"}`}>
+                    <div className="overflow-hidden">
+                      <div className="space-y-1 text-text-secondary">
+                        <p>Bents status: {selected.sourceHealth.bents.status}{selected.sourceHealth.bents.checkedAt ? ` (${new Date(selected.sourceHealth.bents.checkedAt).toLocaleString()})` : ""}</p>
+                        <p>Competitors checked: {selected.sourceHealth.competitors.success}/{selected.sourceHealth.competitors.total} successful</p>
+                        <p>Cycle sources successful: {selected.cycleHealth.successfulSources}/{selected.cycleHealth.totalSources}</p>
+                        <p>{selected.cycleHealth.partialFailure ? "Partial failure detected" : "No partial failure"} · {selected.cycleHealth.stale ? "Older than 24h" : "Within 24h"}</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1822,10 +1710,13 @@ export function ProductsTable({
                             <p>
                               <b>Stock:</b> {c.competitorStockStatus}
                             </p>
-                            <p>
-                              <b>Checked:</b>{" "}
-                              {new Date(c.lastCheckedAt).toLocaleString()}
-                            </p>
+                            {checkedAtPill(c.lastCheckedAt) && (
+                              <p>
+                                <span className={`rounded-full px-2 py-0.5 ${checkedAtPill(c.lastCheckedAt)?.tone}`}>
+                                  {checkedAtPill(c.lastCheckedAt)?.label}
+                                </span>
+                              </p>
+                            )}
                             {c.checkErrorMessage && (
                               <p className="w-full text-amber-700 dark:text-amber-400">
                                 {c.checkErrorMessage}
@@ -2033,10 +1924,6 @@ export function ProductsTable({
                   </div>
                 </div>
 
-                <p className="text-sm text-text-secondary dark:text-text-secondary">
-                  <b>Action owner:</b> {selected.actionOwner} |{" "}
-                  <b>Internal note:</b> {selected.internalNote || "No note yet"}
-                </p>
                 {saveMessage && (
                   <p className="text-sm text-slate-700 dark:text-foreground">
                     {saveMessage}

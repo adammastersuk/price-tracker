@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Download, Filter, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, Input, Select } from "@/components/ui/primitives";
 import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
-import { PricingStatusChip, WorkflowChip } from "@/components/features/status-chip";
+import { PricingStatusChip } from "@/components/features/status-chip";
 import { QueueItem } from "@/lib/data-service";
 import { TrackedProductRow } from "@/types/pricing";
 import { cn, currency, pct } from "@/lib/utils";
@@ -148,7 +148,7 @@ function queueReasonBadge(reason: string) {
   if (reason.includes("Stale check")) return "Stale signal";
   if (reason.includes("Suspicious")) return "Volatility risk";
   if (reason.includes("Bents +£")) return "Price gap";
-  return "Commercial review";
+  return "Commercial check";
 }
 
 export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct, totalRows }: ActionTableProps) {
@@ -175,35 +175,33 @@ export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct,
                 <th className="px-4 py-3">Gap</th>
                 <th className="px-4 py-3">Priority reason</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Workflow</th>
                 <th className="px-4 py-3">Action</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-text-muted">No urgent products right now. Try widening your filters.</td>
+                  <td colSpan={7} className="px-4 py-8 text-center text-text-muted">No urgent products right now. Try widening your filters.</td>
                 </tr>
               ) : rows.map((item) => (
                 <tr key={item.row.id} className="border-t border-border/80 align-top">
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2">
                     <p className="max-w-[280px] truncate font-medium text-slate-900 dark:text-foreground">{item.row.productName}</p>
                     <p className="text-xs text-text-muted">{item.row.internalSku}</p>
                   </td>
-                  <td className="px-4 py-2.5">{currency(item.row.bentsRetailPrice)}</td>
-                  <td className="px-4 py-2.5">{item.lowestTrusted ? `${currency(item.lowestTrusted.price)} · ${item.lowestTrusted.competitorName}` : "No valid competitor"}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2">{currency(item.row.bentsRetailPrice)}</td>
+                  <td className="px-4 py-2">{item.lowestTrusted ? `${currency(item.lowestTrusted.price)} · ${item.lowestTrusted.competitorName}` : "No valid competitor"}</td>
+                  <td className="px-4 py-2">
                     {item.gapGbp > 0 ? <p className="font-medium text-rose-700">{currency(item.gapGbp)} ({pct(item.gapPercent)})</p> : <span className="text-text-muted">-</span>}
                   </td>
-                  <td className="px-4 py-2.5">
-                    <span className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-1 text-[11px] font-medium text-text-secondary">{queueReasonBadge(item.reason)}</span>
+                  <td className="px-4 py-2">
+                    <span className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium leading-5 text-text-secondary whitespace-nowrap">{queueReasonBadge(item.reason)}</span>
                   </td>
-                  <td className="px-4 py-2.5"><PricingStatusChip status={item.row.pricingStatus} /></td>
-                  <td className="px-4 py-2.5"><WorkflowChip status={item.row.actionWorkflowStatus} /></td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2"><PricingStatusChip status={item.row.pricingStatus} /></td>
+                                    <td className="px-4 py-2">
                     <div className="flex flex-col gap-2">
                       <Link href={`/products?search=${encodeURIComponent(item.row.internalSku)}&productId=${encodeURIComponent(item.row.id)}`} className="inline-flex items-center gap-1 text-primary hover:underline">Open details <ArrowUpRight className="h-3.5 w-3.5" /></Link>
-                      <button onClick={() => onRefreshProduct(item.row.id)} disabled={refreshingId === item.row.id} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-hover disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                      <button onClick={() => onRefreshProduct(item.row.id)} disabled={refreshingId === item.row.id} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-text-secondary hover:bg-surface-hover disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                         <RefreshCw className={cn("h-3.5 w-3.5", refreshingId === item.row.id && "animate-spin")} /> {refreshingId === item.row.id ? "Refreshing" : "Refresh check"}
                       </button>
                     </div>
