@@ -19,11 +19,27 @@ export async function POST(request: NextRequest) {
       ? payload.competitorListingIds.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       : undefined;
 
+    const scheduleMode = payload.scheduleMode === "priority" || payload.scheduleMode === "daily" ? payload.scheduleMode : "manual";
+    const refreshScope = competitorListingIds?.length
+      ? "competitor_listing"
+      : productIds?.length
+        ? "product"
+        : "global";
+
+    console.info("[refresh-api] product refresh requested", {
+      refreshScope,
+      productCount: productIds?.length ?? 0,
+      competitorListingCount: competitorListingIds?.length ?? 0,
+      scheduleMode,
+      sampleProductId: productIds?.[0] ?? null,
+      sampleCompetitorListingId: competitorListingIds?.[0] ?? null
+    });
+
     const queued = await enqueueCompetitorRefresh({
       productIds,
       competitorListingIds,
       batchSize: typeof payload.batchSize === "number" ? payload.batchSize : undefined,
-      scheduleMode: payload.scheduleMode === "priority" || payload.scheduleMode === "daily" ? payload.scheduleMode : "manual",
+      scheduleMode,
       triggerSource: "manual"
     });
 

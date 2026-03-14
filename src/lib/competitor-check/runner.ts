@@ -540,6 +540,18 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
 
   await updateProductFromCycle(target, bentsResult, sourceResults);
 
+  if (runId) {
+    console.info("[product-refresh] executed product cycle", {
+      runId,
+      productId: target.productId,
+      sku: target.sku,
+      sourceCount: sourceResults.length,
+      bentsInvoked: true,
+      bentsStatus: bentsResult.status,
+      competitorSourceCount: sourceResults.filter((source) => source.sourceType === "competitor").length
+    });
+  }
+
   try {
     const cycleStatus: CheckStatus = sourceResults.some((s) => s.status === "failed")
       ? "failed"
@@ -548,14 +560,17 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
         : sourceResults.every((s) => s.status === "success")
           ? "success"
           : "pending";
+    const cycleSuccessCount = sourceResults.filter((s) => s.status === "success").length;
+    const cycleFailedCount = sourceResults.filter((s) => s.status === "failed").length;
+    const cycleSuspiciousCount = sourceResults.filter((s) => s.status === "suspicious").length;
     const cycle = await insertProductCycleHistory({
       product_id: target.productId,
       run_id: runId,
       checked_at: checkedAt,
       source_count: sourceResults.length,
-      success_count: sourceResults.filter((s) => s.status === "success").length,
-      failed_count: sourceResults.filter((s) => s.status === "failed").length,
-      suspicious_count: sourceResults.filter((s) => s.status === "suspicious").length,
+      success_count: cycleSuccessCount,
+      failed_count: cycleFailedCount,
+      suspicious_count: cycleSuspiciousCount,
       status: cycleStatus,
       metadata: { sku: target.sku, bentsUrl: target.bentsUrl }
     });
@@ -576,6 +591,19 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
         extraction_source: source.extractionSource,
         notes: source.notes,
         metadata: source.metadata
+      });
+    }
+
+    if (runId) {
+      console.info("[product-refresh] persisted cycle history", {
+        runId,
+        productId: target.productId,
+        cycleId: cycleId ?? null,
+        sourceCount: sourceResults.length,
+        successCount: cycleSuccessCount,
+        failedCount: cycleFailedCount,
+        suspiciousCount: cycleSuspiciousCount,
+        bentsIncluded: sourceResults.some((source) => source.sourceType === "bents")
       });
     }
   } catch (error) {
@@ -612,6 +640,22 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
         metadata: { target }
       });
     }
+  }
+
+  if (options.triggerSource === "manual") {
+    console.info("[product-refresh] queued product cycle refresh targets", {
+      runId: runId ?? null,
+      targetCount: targets.length,
+      productCount: options.productIds?.length ?? 0,
+      competitorListingCount: options.competitorListingIds?.length ?? 0,
+      sampleTarget: targets[0]
+        ? {
+            productId: targets[0].productId,
+            hasBentsUrl: Boolean(targets[0].bentsUrl),
+            competitorMappings: targets[0].competitorMappings.length
+          }
+        : null
+    });
   }
 
   return { runId: runId ?? undefined, queued: targets.length, total: targets.length };
