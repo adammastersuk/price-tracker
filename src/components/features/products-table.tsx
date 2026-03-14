@@ -423,12 +423,14 @@ export function ProductsTable({
   initialFilters,
   configuredOptions,
   initialSelectedProductParam,
+  loadError
 }: {
   rows: TrackedProductRow[];
   onRefreshDone: () => Promise<void>;
   initialFilters?: Partial<typeof defaultFilters>;
   configuredOptions?: ConfiguredOptions;
   initialSelectedProductParam?: string;
+  loadError?: string;
 }) {
   const [filters, setFilters] = useState({
     ...defaultFilters,
@@ -440,7 +442,7 @@ export function ProductsTable({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [message, setMessage] = useState("");
+  const [refreshMessage, setRefreshMessage] = useState("");
   const [bulkMessage, setBulkMessage] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -779,7 +781,7 @@ export function ProductsTable({
   }, [selected]);
 
   const setSummaryMessage = (summary: RefreshSummary) => {
-    setMessage(
+    setRefreshMessage(
       `Refresh complete: ${summary.succeeded} success, ${summary.failed} failed, ${summary.suspicious} suspicious changes.`,
     );
   };
@@ -789,7 +791,7 @@ export function ProductsTable({
     competitorListingIds?: string[],
   ) => {
     setRefreshing(true);
-    setMessage("");
+    setRefreshMessage("");
     try {
       const response = await fetch("/api/competitor/refresh", {
         method: "POST",
@@ -801,7 +803,7 @@ export function ProductsTable({
         error?: string;
       }>(response, {});
       if (!response.ok) {
-        setMessage(
+        setRefreshMessage(
           `Refresh failed: ${payload.error ?? "Unable to complete refresh."}`,
         );
         return;
@@ -809,7 +811,12 @@ export function ProductsTable({
       setSummaryMessage(
         payload.data ?? { succeeded: 0, failed: 0, suspicious: 0 },
       );
-      await onRefreshDone();
+      try {
+        await onRefreshDone();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "Unable to reload products after refresh.";
+        setRefreshMessage((prev) => prev ? `${prev} Reload warning: ${detail}` : `Reload warning: ${detail}`);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -1305,12 +1312,17 @@ export function ProductsTable({
           </CardContent>
         </Card>
       )}
-      {message && (
-        <p className="text-sm text-slate-700 dark:text-foreground">{message}</p>
+      {refreshMessage && (
+        <p className="text-sm text-slate-700 dark:text-foreground">{refreshMessage}</p>
       )}
       {bulkMessage && (
         <p className="text-sm text-slate-700 dark:text-foreground">
           {bulkMessage}
+        </p>
+      )}
+      {loadError && (
+        <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Failed to load products: {loadError}
         </p>
       )}
 
@@ -1361,9 +1373,11 @@ export function ProductsTable({
                     colSpan={9}
                     className="px-3 py-10 text-center text-sm text-text-secondary"
                   >
-                    {totalRows === 0
-                      ? "No products match the current filters."
-                      : "No products available on this page."}
+                    {loadError
+                      ? "Products failed to load. Check the error above and retry."
+                      : totalRows === 0
+                        ? "No products match the current filters."
+                        : "No products available on this page."}
                   </td>
                 </tr>
               ) : (

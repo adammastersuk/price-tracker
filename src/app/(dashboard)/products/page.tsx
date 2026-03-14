@@ -12,16 +12,27 @@ const parseMulti = (value: string | null) => value ? value.split(",").map((v) =>
 
 export default function ProductsPage() {
   const [rows, setRows] = useState<TrackedProductRow[]>([]);
+  const [loadError, setLoadError] = useState("");
   const [configuredOptions, setConfiguredOptions] = useState<{ buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments: Record<string, string[]> }>({ buyers: [], departments: [], competitors: [], buyerDepartments: {} });
   const searchParams = useSearchParams();
 
   const loadProducts = useCallback(async () => {
+    setLoadError("");
     const [productsResponse, settingsResponse] = await Promise.all([
       fetch("/api/products", { cache: "no-store" }),
       fetch("/api/settings", { cache: "no-store" })
     ]);
-    const productsPayload = await productsResponse.json();
-    const settingsPayload = await settingsResponse.json();
+
+    const productsPayload = await productsResponse.json().catch(() => ({}));
+    const settingsPayload = await settingsResponse.json().catch(() => ({}));
+
+    if (!productsResponse.ok) {
+      throw new Error(productsPayload.error ?? "Unable to load products.");
+    }
+    if (!settingsResponse.ok) {
+      throw new Error(settingsPayload.error ?? "Unable to load settings.");
+    }
+
     const buyers = (settingsPayload.data?.buyers ?? []) as BuyerSetting[];
     setRows(productsPayload.data ?? []);
     setConfiguredOptions({
@@ -33,7 +44,9 @@ export default function ProductsPage() {
   }, []);
 
   useEffect(() => {
-    loadProducts();
+    loadProducts().catch((error) => {
+      setLoadError(error instanceof Error ? error.message : "Unable to load products.");
+    });
   }, [loadProducts]);
 
   const selectedProductParam = searchParams.get("productId") ?? searchParams.get("sku") ?? searchParams.get("search") ?? "";
@@ -50,7 +63,7 @@ export default function ProductsPage() {
     <div className="space-y-4 rounded-2xl border bg-panel p-4 md:p-5">
       <h2 className="text-xl font-semibold text-foreground">Products</h2>
       <CsvImport onImported={loadProducts} />
-      <ProductsTable rows={rows} onRefreshDone={loadProducts} initialFilters={initialFilters} configuredOptions={configuredOptions} initialSelectedProductParam={selectedProductParam} />
+      <ProductsTable rows={rows} onRefreshDone={loadProducts} initialFilters={initialFilters} configuredOptions={configuredOptions} initialSelectedProductParam={selectedProductParam} loadError={loadError} />
     </div>
   );
 }

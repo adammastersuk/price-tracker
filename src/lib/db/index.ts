@@ -207,7 +207,7 @@ const defaultRuntimeSettings: RuntimeSettings = {
   }
 };
 
-const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*),product_cycle_history(*),product_source_history(*)";
+const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
 
 function isTrustworthyListing(comp: CompetitorListing): boolean {
   if (comp.lastCheckStatus !== "success") return false;
@@ -270,8 +270,8 @@ function mapToTrackedProductRow(
 
   const nowTs = Date.now();
   const staleMs = (Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24) * 3600_000;
-  const sourceHistoryRows = history?.sourceHistory ?? product.product_source_history ?? [];
-  const cycleHistoryRows = history?.cycleHistory ?? product.product_cycle_history ?? [];
+  const sourceHistoryRows = history?.sourceHistory ?? [];
+  const cycleHistoryRows = history?.cycleHistory ?? [];
   const sourceHistory = [...sourceHistoryRows].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
   const cycleHistory = [...cycleHistoryRows].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
   const latestCycle = cycleHistory[0];
