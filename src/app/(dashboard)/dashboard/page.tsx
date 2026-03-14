@@ -105,6 +105,12 @@ export default function DashboardPage() {
   const triageQueue = useMemo(() => queue.slice(0, 7), [queue]);
   const opportunityCards = useMemo(() => queue.slice(0, 4), [queue]);
   const exceptions = useMemo(() => exceptionBreakdown(filteredRows, runtime), [filteredRows, runtime]);
+  const monitorability = useMemo(() => ({
+    full: filteredRows.filter((r) => r.monitorability.category === "fully_monitorable").length,
+    partial: filteredRows.filter((r) => r.monitorability.category === "partial").length,
+    inactive: filteredRows.filter((r) => r.monitorability.category === "inactive").length,
+    missingConfig: filteredRows.filter((r) => r.monitorability.category === "missing_bents_url" || r.monitorability.category === "missing_competitor_urls").length
+  }), [filteredRows]);
 
   const kpiItems = useMemo(() => {
     const total = Math.max(stats.total, 1);
@@ -251,6 +257,19 @@ export default function DashboardPage() {
                   <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
                     <span className="text-text-secondary">Missing market data</span>
                     <span className="font-semibold">{exceptions.missingMapping + exceptions.missingValidCompetitorPrice}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
+                    <span className="text-text-secondary">Fully monitorable</span>
+                    <span className="font-semibold">{monitorability.full}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
+                    <span className="text-text-secondary">Partial / config gaps</span>
+                    <span className="font-semibold">{monitorability.partial + monitorability.missingConfig}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
+                    <span className="text-text-secondary">Inactive products</span>
+                    <span className="font-semibold">{monitorability.inactive}</span>
                   </div>
                   <div className="rounded-xl border border-dashed border-border p-3 text-xs text-text-muted">
                     Tip: focus first on products with <span className="font-medium text-slate-800 dark:text-foreground">high price gap</span>, <span className="font-medium text-slate-800 dark:text-foreground">open workflows</span>, and recent stock volatility.

@@ -229,33 +229,33 @@ export async function deleteSavedView(id: string) {
 
 export async function getScraperHealth(limit = 14) {
   const since = new Date(Date.now() - limit * 24 * 3600_000).toISOString();
-  const rows = await supabaseRequest<Array<{ competitor_name: string | null; status: string; suspicious: boolean; checked_at: string; duration_ms: number | null }>>({
-    table: "refresh_run_items",
-    query: new URLSearchParams({ select: "competitor_name,status,suspicious,checked_at,duration_ms", checked_at: `gte.${since}`, order: "checked_at.desc", limit: "5000" })
+  const rows = await supabaseRequest<Array<{ source_name: string; source_type: string; status: string; success: boolean; checked_at: string; extraction_source: string | null; metadata: Record<string, unknown> | null }>>({
+    table: "product_source_history",
+    query: new URLSearchParams({ select: "source_name,source_type,status,success,checked_at,extraction_source,metadata", checked_at: `gte.${since}`, order: "checked_at.desc", limit: "8000" })
   });
 
-  const grouped = new Map<string, { competitorName: string; total: number; success: number; failed: number; suspicious: number; durations: number[]; lastSuccess: string | null }>();
+  const grouped = new Map<string, { competitorName: string; total: number; success: number; failed: number; suspicious: number; lastSuccess: string | null; selectors: string[]; firstParty: boolean }>();
   for (const row of rows) {
-    const key = (row.competitor_name || "Unknown").trim() || "Unknown";
-    const entry = grouped.get(key) ?? { competitorName: key, total: 0, success: 0, failed: 0, suspicious: 0, durations: [], lastSuccess: null };
+    const key = (row.source_name || "Unknown").trim() || "Unknown";
+    const entry = grouped.get(key) ?? { competitorName: key, total: 0, success: 0, failed: 0, suspicious: 0, lastSuccess: null, selectors: [], firstParty: row.source_type === "bents" || /bents/i.test(key) };
     entry.total += 1;
-    if (row.status === "success") {
+    if (row.success || row.status === "success") {
       entry.success += 1;
       if (!entry.lastSuccess || new Date(row.checked_at).getTime() > new Date(entry.lastSuccess).getTime()) {
         entry.lastSuccess = row.checked_at;
       }
     }
     if (row.status === "failed") entry.failed += 1;
-    if (row.suspicious || row.status === "suspicious") entry.suspicious += 1;
-    if (row.duration_ms && row.duration_ms > 0) entry.durations.push(row.duration_ms);
+    if (row.status === "suspicious") entry.suspicious += 1;
+    const selectors = row.metadata?.selectors_checked;
+    if (Array.isArray(selectors)) {
+      entry.selectors = [...new Set([...entry.selectors, ...selectors.filter((x): x is string => typeof x === "string")])].slice(0, 6);
+    }
     grouped.set(key, entry);
   }
 
-  return [...grouped.values()].map((entry) => {
+  const mapped = [...grouped.values()].map((entry) => {
     const failureRate = entry.total ? entry.failed / entry.total : 0;
-    const sortedDur = [...entry.durations].sort((a, b) => a - b);
-    const median = sortedDur.length ? sortedDur[Math.floor(sortedDur.length / 2)] : null;
-    const avg = sortedDur.length ? Math.round(sortedDur.reduce((a, b) => a + b, 0) / sortedDur.length) : null;
     const health = failureRate > 0.35 ? "Failing" : failureRate > 0.15 || entry.suspicious > 0 ? "Watch" : "Healthy";
     return {
       competitorName: entry.competitorName,
@@ -265,9 +265,28 @@ export async function getScraperHealth(limit = 14) {
       failureRate: Number((failureRate * 100).toFixed(1)),
       suspiciousCount: entry.suspicious,
       lastSuccessfulRun: entry.lastSuccess,
-      avgDurationMs: avg,
-      medianDurationMs: median,
-      health
+      health,
+      selectors: entry.selectors,
+      firstParty: entry.firstParty,
+      extractionSource: entry.firstParty ? "bents_dom_adapter" : undefined
     };
-  }).sort((a, b) => b.failureRate - a.failureRate || b.suspiciousCount - a.suspiciousCount);
+  });
+
+  if (!mapped.some((row) => /bents/i.test(row.competitorName))) {
+    mapped.unshift({
+      competitorName: "Bents (first-party adapter)",
+      totalRuns: 0,
+      successRate: 0,
+      failureCount: 0,
+      failureRate: 0,
+      suspiciousCount: 0,
+      lastSuccessfulRun: null,
+      health: "Watch",
+      selectors: [".price--withTax", "[data-product-price-with-tax]", ".in-stock"],
+      firstParty: true,
+      extractionSource: "bents_dom_adapter"
+    });
+  }
+
+  return mapped.sort((a, b) => Number(b.firstParty) - Number(a.firstParty) || b.failureRate - a.failureRate || b.suspiciousCount - a.suspiciousCount);
 }

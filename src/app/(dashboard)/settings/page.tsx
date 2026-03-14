@@ -28,7 +28,7 @@ function AccordionSection({ title, count, open, onToggle, children }: { title: s
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsPayload>(defaultState);
   const [alerts, setAlerts] = useState<Array<{ id: string; reason: string; competitor_name?: string; status: string; created_at: string; gap_amount_gbp?: number; product_id?: string }>>([]);
-  const [healthRows, setHealthRows] = useState<Array<{ competitorName: string; health: string; successRate: number; failureRate: number; suspiciousCount: number; lastSuccessfulRun: string | null }>>([]);
+  const [healthRows, setHealthRows] = useState<Array<{ competitorName: string; health: string; successRate: number; failureRate: number; suspiciousCount: number; lastSuccessfulRun: string | null; selectors?: string[]; firstParty?: boolean; extractionSource?: string }>>([]);
   const [activity, setActivity] = useState<Array<{ id: string; summary: string; created_at: string }>>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -233,12 +233,15 @@ export default function SettingsPage() {
             <CardHeader><CardTitle>Scraper health</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
               {healthRows.slice(0, 8).map((row) => (
-                <div key={row.competitorName} className="rounded border px-3 py-2">
-                  <div className="flex items-center justify-between">
-                    <p className="font-medium">{row.competitorName}</p>
+                <div key={row.competitorName} className={`rounded border px-3 py-2 ${row.firstParty ? "border-sky-300 bg-sky-50/50" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">{row.competitorName}{row.firstParty ? " · Priority adapter" : ""}</p>
                     <span className={`rounded-full px-2 py-0.5 text-xs ${row.health === "Healthy" ? "bg-emerald-100 text-emerald-800" : row.health === "Watch" ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-700"}`}>{row.health}</span>
                   </div>
                   <p className="text-xs text-slate-500">Success {row.successRate}% · Fail {row.failureRate}% · Suspicious {row.suspiciousCount}</p>
+                  {row.lastSuccessfulRun ? <p className="text-xs text-slate-500">Last success: {new Date(row.lastSuccessfulRun).toLocaleString()}</p> : null}
+                  {row.extractionSource ? <p className="text-xs text-slate-500">Source: {row.extractionSource}</p> : null}
+                  {row.selectors?.length ? <p className="text-xs text-slate-500">Signals: {row.selectors.join(", ")}</p> : null}
                 </div>
               ))}
             </CardContent>

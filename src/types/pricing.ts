@@ -3,6 +3,7 @@ export type PricingStatus = "Higher than competitor" | "Cheaper than competitor"
 export type MatchConfidence = "High" | "Medium" | "Low" | "Needs review";
 export type WorkflowStatus = "Open" | "Monitoring" | "Reviewed" | "No Action" | "Closed" | "In Review" | "Awaiting Supplier" | "Resolved";
 export type CheckStatus = "success" | "failed" | "suspicious" | "pending";
+export type MonitorabilityCategory = "fully_monitorable" | "missing_bents_url" | "missing_competitor_urls" | "inactive" | "partial";
 
 export interface PriceHistoryPoint { checkedAt: string; bentsPrice: number; competitorPrice: number | null; }
 export interface NoteEntry { id: string; author: string; message: string; createdAt: string; }
@@ -39,6 +40,25 @@ export interface TrackedProductRow {
   competitorListings: CompetitorListing[];
   matchConfidence: MatchConfidence; reviewStatus: MatchConfidence; internalNote: string; actionOwner: string; actionWorkflowStatus: WorkflowStatus;
   noteHistory: NoteEntry[]; history: PriceHistoryPoint[];
+  sourceHealth: {
+    bents: { success: boolean; checkedAt: string | null; status: CheckStatus; stale: boolean; notes?: string; };
+    competitors: { total: number; success: number; failed: number; suspicious: number; pending: number; stale: boolean; lastCheckedAt: string | null; };
+  };
+  cycleHealth: {
+    lastCycleCheckedAt: string | null;
+    lastFullCheckAt: string | null;
+    successfulSources: number;
+    failedSources: number;
+    totalSources: number;
+    partialFailure: boolean;
+    stale: boolean;
+  };
+  monitorability: {
+    category: MonitorabilityCategory;
+    label: string;
+    reasons: string[];
+    isMonitorable: boolean;
+  };
 }
 
 export interface CsvImportRow {
