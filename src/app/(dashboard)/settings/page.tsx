@@ -42,26 +42,42 @@ export default function SettingsPage() {
   const [openSection, setOpenSection] = useState<"buyers" | "departments" | "competitors" | null>(null);
 
   const load = useCallback(async () => {
-    const [settingsResponse, alertsResponse, healthResponse, activityResponse] = await Promise.all([
-      fetch("/api/settings", { cache: "no-store" }),
-      fetch("/api/alerts", { cache: "no-store" }),
-      fetch("/api/scraper-health", { cache: "no-store" }),
-      fetch("/api/activity", { cache: "no-store" })
-    ]);
-    const [settingsPayload, alertsPayload, healthPayload, activityPayload] = await Promise.all([
-      settingsResponse.json(),
-      alertsResponse.json(),
-      healthResponse.json(),
-      activityResponse.json()
-    ]);
+    setError("");
+
+    const settingsResponse = await fetch("/api/settings", { cache: "no-store" });
+    const settingsPayload = await settingsResponse.json();
     if (!settingsResponse.ok) throw new Error(settingsPayload.error ?? "Failed to load settings");
-    if (!alertsResponse.ok) throw new Error(alertsPayload.error ?? "Failed to load alerts");
-    if (!healthResponse.ok) throw new Error(healthPayload.error ?? "Failed to load scraper health");
-    if (!activityResponse.ok) throw new Error(activityPayload.error ?? "Failed to load activity");
     setSettings(settingsPayload.data);
-    setAlerts(alertsPayload.data ?? []);
-    setHealthRows(healthPayload.data ?? []);
-    setActivity(activityPayload.data ?? []);
+
+    const [alertsResult, healthResult, activityResult] = await Promise.allSettled([
+      fetch("/api/alerts", { cache: "no-store" }).then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? "Failed to load alerts");
+        return payload;
+      }),
+      fetch("/api/scraper-health", { cache: "no-store" }).then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? "Failed to load scraper health");
+        return payload;
+      }),
+      fetch("/api/activity", { cache: "no-store" }).then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? "Failed to load activity");
+        return payload;
+      })
+    ]);
+
+    if (alertsResult.status === "fulfilled") setAlerts(alertsResult.value.data ?? []);
+    else setError((prev) => prev || alertsResult.reason?.message || "Failed to load alerts");
+
+    if (healthResult.status === "fulfilled") setHealthRows(healthResult.value.data ?? []);
+    else {
+      setHealthRows([]);
+      setError((prev) => prev || healthResult.reason?.message || "Failed to load scraper health");
+    }
+
+    if (activityResult.status === "fulfilled") setActivity(activityResult.value.data ?? []);
+    else setError((prev) => prev || activityResult.reason?.message || "Failed to load activity");
   }, []);
 
   useEffect(() => { load().catch((err) => setError(err.message)); }, [load]);

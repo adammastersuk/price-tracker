@@ -237,11 +237,13 @@ function buildMonitorability(product: ProductRecord, listings: CompetitorListing
   return { category: "fully_monitorable", label: "Fully monitorable", reasons: [], isMonitorable: true };
 }
 
-function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
+function mapToTrackedProductRow(
+  product: ProductRecord,
+  history?: { cycleHistory?: ProductCycleHistoryRecord[]; sourceHistory?: ProductSourceHistoryRecord[]; }
+): TrackedProductRow {
   const sortedComps = [...(product.competitor_prices ?? [])].sort((a, b) =>
     new Date(b.last_checked_at).getTime() - new Date(a.last_checked_at).getTime()
   );
-  const latestComp = sortedComps[0];
   const latestNote = [...(product.product_notes ?? [])].sort((a, b) =>
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   )[0];
@@ -268,8 +270,10 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
 
   const nowTs = Date.now();
   const staleMs = (Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24) * 3600_000;
-  const sourceHistory = [...(product.product_source_history ?? [])].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
-  const cycleHistory = [...(product.product_cycle_history ?? [])].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
+  const sourceHistoryRows = history?.sourceHistory ?? product.product_source_history ?? [];
+  const cycleHistoryRows = history?.cycleHistory ?? product.product_cycle_history ?? [];
+  const sourceHistory = [...sourceHistoryRows].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
+  const cycleHistory = [...cycleHistoryRows].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
   const latestCycle = cycleHistory[0];
   const lastFullCycle = cycleHistory.find((c) => c.failed_count === 0 && c.source_count > 0) ?? null;
 
@@ -389,16 +393,69 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
   };
 }
 
+async function loadOptionalCycleAndSourceHistory(productIds: string[]) {
+  if (!productIds.length) {
+    return {
+      cycleByProductId: new Map<string, ProductCycleHistoryRecord[]>(),
+      sourceByProductId: new Map<string, ProductSourceHistoryRecord[]>()
+    };
+  }
+
+  const cycleByProductId = new Map<string, ProductCycleHistoryRecord[]>();
+  const sourceByProductId = new Map<string, ProductSourceHistoryRecord[]>();
+
+  try {
+    const cycleRows = await supabaseRequest<ProductCycleHistoryRecord[]>({
+      table: "product_cycle_history",
+      query: new URLSearchParams({ select: "*", product_id: `in.(${productIds.join(",")})`, order: "checked_at.desc", limit: "12000" })
+    });
+    for (const row of cycleRows) {
+      const list = cycleByProductId.get(row.product_id) ?? [];
+      list.push(row);
+      cycleByProductId.set(row.product_id, list);
+    }
+  } catch (error) {
+    console.warn("Cycle history unavailable; continuing without it", error);
+  }
+
+  try {
+    const sourceRows = await supabaseRequest<ProductSourceHistoryRecord[]>({
+      table: "product_source_history",
+      query: new URLSearchParams({ select: "*", product_id: `in.(${productIds.join(",")})`, order: "checked_at.desc", limit: "15000" })
+    });
+    for (const row of sourceRows) {
+      const list = sourceByProductId.get(row.product_id) ?? [];
+      list.push(row);
+      sourceByProductId.set(row.product_id, list);
+    }
+  } catch (error) {
+    console.warn("Source history unavailable; continuing without it", error);
+  }
+
+  return { cycleByProductId, sourceByProductId };
+}
+
 export async function getProducts(): Promise<TrackedProductRow[]> {
   const query = new URLSearchParams({ select: productSelect, order: "updated_at.desc" });
   const rows = await supabaseRequest<ProductRecord[]>({ table: "products", query });
-  return rows.map(mapToTrackedProductRow);
+  const productIds = rows.map((row) => row.id);
+  const { cycleByProductId, sourceByProductId } = await loadOptionalCycleAndSourceHistory(productIds);
+  return rows.map((row) => mapToTrackedProductRow(row, {
+    cycleHistory: cycleByProductId.get(row.id) ?? [],
+    sourceHistory: sourceByProductId.get(row.id) ?? []
+  }));
 }
 
 export async function getProductById(productId: string): Promise<TrackedProductRow | null> {
   const query = new URLSearchParams({ select: productSelect, id: `eq.${productId}`, limit: "1" });
   const rows = await supabaseRequest<ProductRecord[]>({ table: "products", query });
-  return rows[0] ? mapToTrackedProductRow(rows[0]) : null;
+  const row = rows[0];
+  if (!row) return null;
+  const { cycleByProductId, sourceByProductId } = await loadOptionalCycleAndSourceHistory([row.id]);
+  return mapToTrackedProductRow(row, {
+    cycleHistory: cycleByProductId.get(row.id) ?? [],
+    sourceHistory: sourceByProductId.get(row.id) ?? []
+  });
 }
 
 export async function createProduct(input: ProductInput): Promise<ProductRecord[]> {
