@@ -21,8 +21,8 @@ type NavItem = {
 };
 
 const secondaryNav: Array<NavItem> = [
-  { href: "/settings", label: "Settings", icon: Settings, comingSoon: true },
-  { href: "/settings", label: "Billing", icon: CreditCard },
+  { href: "/settings", label: "Settings", icon: Settings },
+  { label: "Billing", icon: CreditCard, comingSoon: true },
   { label: "Help", icon: CircleHelp, comingSoon: true }
 ];
 

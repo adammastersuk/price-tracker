@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, ChevronRight } from "lucide-react";
 import { Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar, BarChart } from "recharts";
 import { safeReadJsonResponse } from "@/lib/json";
 import {
@@ -99,7 +101,9 @@ export default function DashboardPage() {
 
   const filteredRows = useMemo(() => queryProducts(rows, filters), [rows, filters]);
   const stats = useMemo(() => dashboardStats(filteredRows, runtime), [filteredRows, runtime]);
-  const queue = useMemo(() => prioritisedReviewQueue(filteredRows, runtime).slice(0, 10), [filteredRows, runtime]);
+  const queue = useMemo(() => prioritisedReviewQueue(filteredRows, runtime), [filteredRows, runtime]);
+  const triageQueue = useMemo(() => queue.slice(0, 7), [queue]);
+  const opportunityCards = useMemo(() => queue.slice(0, 4), [queue]);
   const exceptions = useMemo(() => exceptionBreakdown(filteredRows, runtime), [filteredRows, runtime]);
 
   const kpiItems = useMemo(() => {
@@ -167,7 +171,7 @@ export default function DashboardPage() {
   if (loadState === "error") return <ErrorDashboardState retry={loadDashboard} />;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       <DashboardHeader
         filters={{ search: filters.search, buyers: filters.buyers, departments: filters.departments, competitors: filters.competitors, statuses: filters.statuses }}
         choices={{ buyers: choices.buyers, departments: availableDepartments, competitors: choices.competitors, statuses: [...new Set([...choices.statuses, ...choices.workflows])] }}
@@ -181,8 +185,8 @@ export default function DashboardPage() {
         <>
           <DashboardKpiGrid items={kpiItems} />
 
-          <div className="grid gap-4 xl:grid-cols-3">
-            <div className="space-y-4 xl:col-span-2">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)]">
+            <div className="space-y-3">
               <InsightPanel title="Price Change Trend" subtitle="Daily pricing movement and stock pressure">
                 {priceTrendData.length === 0 ? null : (
                   <div className="h-72">
@@ -200,10 +204,10 @@ export default function DashboardPage() {
                 )}
               </InsightPanel>
 
-              <ProductsNeedingAttention rows={queue} refreshingId={refreshingId} onRefreshProduct={onRefreshProduct} />
+              <ProductsNeedingAttention rows={triageQueue} totalRows={queue.length} refreshingId={refreshingId} onRefreshProduct={onRefreshProduct} />
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
               <InsightPanel title="Price Position Distribution" subtitle="How your catalog sits against market" empty={distributionData.length === 0}>
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -257,16 +261,27 @@ export default function DashboardPage() {
           </div>
 
           <Card className="border-slate-200/80 shadow-sm dark:border-border">
-            <CardHeader>
+            <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-slate-900 dark:text-foreground">Pricing Opportunity Breakdown</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {queue.slice(0, 4).map((item) => (
-                <div key={item.row.id} className="rounded-xl border border-border bg-muted/40 p-3">
-                  <p className="truncate text-sm font-medium text-slate-900 dark:text-foreground">{item.row.productName}</p>
+              {opportunityCards.map((item) => (
+                <Link
+                  key={item.row.id}
+                  href={`/products?search=${encodeURIComponent(item.row.internalSku)}&productId=${encodeURIComponent(item.row.id)}`}
+                  className="group rounded-xl border border-border bg-muted/30 p-3 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/60 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary active:translate-y-0"
+                  aria-label={`Open details for ${item.row.productName}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="truncate text-sm font-medium text-slate-900 dark:text-foreground">{item.row.productName}</p>
+                    <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5" />
+                  </div>
                   <p className="mt-1 text-xs text-text-muted">{item.reason}</p>
                   <p className="mt-2 text-sm text-text-secondary">Current {currency(item.row.bentsRetailPrice)} · {getStockLabel(item.row)}</p>
-                </div>
+                  <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary">
+                    Open details <ArrowUpRight className="h-3.5 w-3.5" />
+                  </span>
+                </Link>
               ))}
             </CardContent>
           </Card>

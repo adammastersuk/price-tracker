@@ -137,17 +137,32 @@ interface ActionTableProps {
   rows: QueueItem[];
   refreshingId: string | null;
   onRefreshProduct: (id: string) => void;
+  totalRows: number;
 }
 
-export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct }: ActionTableProps) {
+function queueReasonBadge(reason: string) {
+  if (reason.includes("Promo discrepancy")) return "Promo mismatch";
+  if (reason.includes("Missing competitor mapping")) return "Missing market map";
+  if (reason.includes("Missing valid competitor price")) return "Missing market price";
+  if (reason.includes("Failed check")) return "Failed check";
+  if (reason.includes("Stale check")) return "Stale signal";
+  if (reason.includes("Suspicious")) return "Volatility risk";
+  if (reason.includes("Bents +£")) return "Price gap";
+  return "Commercial review";
+}
+
+export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct, totalRows }: ActionTableProps) {
   return (
     <Card className="border-slate-200/80 shadow-sm dark:border-border">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 pb-4">
-        <div>
+        <div className="space-y-1">
           <CardTitle className="text-base font-semibold text-slate-900 dark:text-foreground">Products Needing Attention</CardTitle>
-          <p className="text-xs text-text-muted">Prioritized by pricing risk and data quality confidence.</p>
+          <p className="text-xs text-text-muted">Showing the highest-priority triage items by pricing, stock and data confidence.</p>
         </div>
-        <Link href="/products" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">Open full catalog <ArrowRight className="h-4 w-4" /></Link>
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-text-muted">Showing {rows.length} of {totalRows}</p>
+          <Link href="/products" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">Open full catalog <ArrowRight className="h-4 w-4" /></Link>
+        </div>
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
@@ -158,6 +173,7 @@ export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct 
                 <th className="px-4 py-3">Current</th>
                 <th className="px-4 py-3">Lowest competitor</th>
                 <th className="px-4 py-3">Gap</th>
+                <th className="px-4 py-3">Priority reason</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Workflow</th>
                 <th className="px-4 py-3">Action</th>
@@ -166,22 +182,25 @@ export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct 
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-text-muted">No urgent products right now. Try widening your filters.</td>
+                  <td colSpan={8} className="px-4 py-8 text-center text-text-muted">No urgent products right now. Try widening your filters.</td>
                 </tr>
               ) : rows.map((item) => (
                 <tr key={item.row.id} className="border-t border-border/80 align-top">
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-2.5">
                     <p className="max-w-[280px] truncate font-medium text-slate-900 dark:text-foreground">{item.row.productName}</p>
                     <p className="text-xs text-text-muted">{item.row.internalSku}</p>
                   </td>
-                  <td className="px-4 py-3">{currency(item.row.bentsRetailPrice)}</td>
-                  <td className="px-4 py-3">{item.lowestTrusted ? `${currency(item.lowestTrusted.price)} · ${item.lowestTrusted.competitorName}` : "No valid competitor"}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-2.5">{currency(item.row.bentsRetailPrice)}</td>
+                  <td className="px-4 py-2.5">{item.lowestTrusted ? `${currency(item.lowestTrusted.price)} · ${item.lowestTrusted.competitorName}` : "No valid competitor"}</td>
+                  <td className="px-4 py-2.5">
                     {item.gapGbp > 0 ? <p className="font-medium text-rose-700">{currency(item.gapGbp)} ({pct(item.gapPercent)})</p> : <span className="text-text-muted">-</span>}
                   </td>
-                  <td className="px-4 py-3"><PricingStatusChip status={item.row.pricingStatus} /></td>
-                  <td className="px-4 py-3"><WorkflowChip status={item.row.actionWorkflowStatus} /></td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-2.5">
+                    <span className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-1 text-[11px] font-medium text-text-secondary">{queueReasonBadge(item.reason)}</span>
+                  </td>
+                  <td className="px-4 py-2.5"><PricingStatusChip status={item.row.pricingStatus} /></td>
+                  <td className="px-4 py-2.5"><WorkflowChip status={item.row.actionWorkflowStatus} /></td>
+                  <td className="px-4 py-2.5">
                     <div className="flex flex-col gap-2">
                       <Link href={`/products?search=${encodeURIComponent(item.row.internalSku)}&productId=${encodeURIComponent(item.row.id)}`} className="inline-flex items-center gap-1 text-primary hover:underline">Open details <ArrowUpRight className="h-3.5 w-3.5" /></Link>
                       <button onClick={() => onRefreshProduct(item.row.id)} disabled={refreshingId === item.row.id} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-hover disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
