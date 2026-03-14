@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, ArrowUpRight, Download, Filter, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowRight, Download, Filter, TrendingDown, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, Input, Select } from "@/components/ui/primitives";
 import { MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import { PricingStatusChip } from "@/components/features/status-chip";
@@ -135,8 +135,6 @@ export function InsightPanel({ title, subtitle, children, empty }: { title: stri
 
 interface ActionTableProps {
   rows: QueueItem[];
-  refreshingId: string | null;
-  onRefreshProduct: (id: string) => void;
   totalRows: number;
 }
 
@@ -151,7 +149,14 @@ function queueReasonBadge(reason: string) {
   return "Commercial check";
 }
 
-export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct, totalRows }: ActionTableProps) {
+function dashboardStatus(status: TrackedProductRow["pricingStatus"]) {
+  if (status === "Cheaper than competitor") return "Cheaper than Bents";
+  if (status === "Missing competitor data") return "Check failed";
+  if (status === "In line with competitor") return "Price gap";
+  return status;
+}
+
+export function ProductsNeedingAttention({ rows, totalRows }: ActionTableProps) {
   return (
     <Card className="border-slate-200/80 shadow-sm dark:border-border">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 pb-4">
@@ -197,14 +202,11 @@ export function ProductsNeedingAttention({ rows, refreshingId, onRefreshProduct,
                   <td className="px-4 py-2">
                     <span className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium leading-5 text-text-secondary whitespace-nowrap">{queueReasonBadge(item.reason)}</span>
                   </td>
-                  <td className="px-4 py-2"><PricingStatusChip status={item.row.pricingStatus} /></td>
-                                    <td className="px-4 py-2">
-                    <div className="flex flex-col gap-2">
-                      <Link href={`/products?search=${encodeURIComponent(item.row.internalSku)}&productId=${encodeURIComponent(item.row.id)}`} className="inline-flex items-center gap-1 text-primary hover:underline">Open details <ArrowUpRight className="h-3.5 w-3.5" /></Link>
-                      <button onClick={() => onRefreshProduct(item.row.id)} disabled={refreshingId === item.row.id} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-text-secondary hover:bg-surface-hover disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-                        <RefreshCw className={cn("h-3.5 w-3.5", refreshingId === item.row.id && "animate-spin")} /> {refreshingId === item.row.id ? "Refreshing" : "Refresh check"}
-                      </button>
-                    </div>
+                  <td className="px-4 py-2">
+                    <PricingStatusChip status={dashboardStatus(item.row.pricingStatus)} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <Link href={`/products?search=${encodeURIComponent(item.row.internalSku)}&productId=${encodeURIComponent(item.row.id)}`} className="inline-flex items-center text-xs font-medium text-primary hover:underline">View →</Link>
                   </td>
                 </tr>
               ))}
