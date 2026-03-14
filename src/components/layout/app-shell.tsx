@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
-import { BarChart3, Bell, CircleHelp, CreditCard, LayoutDashboard, Moon, Package, PanelLeftClose, PanelLeftOpen, Settings, Sparkles, Sun, TriangleAlert } from "lucide-react";
+import { BarChart3, Bell, LayoutDashboard, Moon, Package, PanelLeftClose, PanelLeftOpen, Settings, Sparkles, Sun, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -21,9 +21,7 @@ type NavItem = {
 };
 
 const secondaryNav: Array<NavItem> = [
-  { href: "/settings", label: "Settings", icon: Settings },
-  { label: "Billing", icon: CreditCard, comingSoon: true },
-  { label: "Help", icon: CircleHelp, comingSoon: true }
+  { href: "/settings", label: "Settings", icon: Settings }
 ];
 
 type Theme = "light" | "dark";
