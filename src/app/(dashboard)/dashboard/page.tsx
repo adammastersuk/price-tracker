@@ -180,7 +180,7 @@ export default function DashboardPage() {
     <div className="space-y-3">
       <DashboardHeader
         filters={{ search: filters.search, buyers: filters.buyers, departments: filters.departments, competitors: filters.competitors, statuses: filters.statuses }}
-        choices={{ buyers: choices.buyers, departments: availableDepartments, competitors: choices.competitors, statuses: [...new Set([...choices.statuses, ...choices.workflows])] }}
+        choices={{ buyers: choices.buyers, departments: availableDepartments, competitors: choices.competitors, statuses: choices.statuses }}
         openFilter={openFilter}
         onOpenFilter={setOpenFilter}
         onSearch={(search) => setFilters((prev) => ({ ...prev, search }))}
@@ -272,7 +272,7 @@ export default function DashboardPage() {
                     <span className="font-semibold">{monitorability.inactive}</span>
                   </div>
                   <div className="rounded-xl border border-dashed border-border p-3 text-xs text-text-muted">
-                    Tip: focus first on products with <span className="font-medium text-slate-800 dark:text-foreground">high price gap</span>, <span className="font-medium text-slate-800 dark:text-foreground">open workflows</span>, and recent stock volatility.
+                    Tip: focus first on products with <span className="font-medium text-slate-800 dark:text-foreground">high price gap</span>, <span className="font-medium text-slate-800 dark:text-foreground">recent checks</span>, and stock volatility.
                   </div>
                 </CardContent>
               </Card>
