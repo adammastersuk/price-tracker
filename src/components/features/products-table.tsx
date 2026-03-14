@@ -1380,6 +1380,19 @@ export function ProductsTable({
                       View
                     </Button>
                   </td>
+                  <td className="px-3 py-2 text-xs text-text-secondary">{marginLabel(r)}</td>
+                  <td className="px-3 py-2">
+                    <Button
+                      type="button"
+                      className="px-2 py-1 text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedId(r.id);
+                      }}
+                    >
+                      Review
+                    </Button>
+                  </td>
                 </tr>
                 ))
               )}
