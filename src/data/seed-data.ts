@@ -89,6 +89,21 @@ if (competitorCurrent !== null) {
     actionOwner: ["Olivia Clarke", "James Patel", "Emma Reed", "Rachel Moss"][index % 4],
     actionWorkflowStatus: index % 8 === 0 ? "Open" : index % 5 === 0 ? "Awaiting Supplier" : index % 3 === 0 ? "Resolved" : "In Review",
     noteHistory: [{ id: `n${index}-1`, author: "Pricing Analyst", message: "Reviewed against latest promo windows.", createdAt: new Date(Date.now() - 86400000).toISOString() }],
-    history: Array.from({ length: 8 }).map((__, h) => ({ checkedAt: new Date(Date.now() - h * 86400000).toISOString(), bentsPrice, competitorPrice: competitorCurrent ? Number((competitorCurrent + h).toFixed(2)) : null }))
+    history: Array.from({ length: 8 }).map((__, h) => ({ checkedAt: new Date(Date.now() - h * 86400000).toISOString(), bentsPrice, competitorPrice: competitorCurrent ? Number((competitorCurrent + h).toFixed(2)) : null })),
+    sourceHealth: {
+      bents: { success: true, checkedAt: new Date(Date.now() - index * 3600_000 * 4).toISOString(), status: "success", stale: false },
+      competitors: { total: 1, success: 1, failed: 0, suspicious: 0, pending: 0, stale: false, lastCheckedAt: new Date(Date.now() - index * 3600_000 * 4).toISOString() }
+    },
+    cycleHealth: {
+      lastCycleCheckedAt: new Date(Date.now() - index * 3600_000 * 4).toISOString(),
+      lastFullCheckAt: new Date(Date.now() - index * 3600_000 * 4).toISOString(),
+      successfulSources: 2,
+      failedSources: 0,
+      totalSources: 2,
+      partialFailure: false,
+      stale: false
+    },
+    monitorability: { category: "fully_monitorable", label: "Fully monitorable", reasons: [], isMonitorable: true }
+
   };
 });

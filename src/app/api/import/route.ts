@@ -170,7 +170,12 @@ export async function POST(request: NextRequest) {
       unmatchedDepartments: [...unmatchedDepartments],
       unmatchedCompetitors: [...unmatchedCompetitors],
       previewRows: [...rowErrors, ...rowWarnings].slice(0, 5),
-      monitorableRows: prepared.filter((row) => !row.hasError).length
+      monitorableRows: prepared.filter((row) => !row.hasError).length,
+      monitorabilityBreakdown: {
+        fullyMonitorable: prepared.filter((row) => !row.hasError && looksLikeValidUrl(row.bentsUrl) && looksLikeValidUrl(row.competitorUrl)).length,
+        missingBentsUrl: prepared.filter((row) => !looksLikeValidUrl(row.bentsUrl)).length,
+        missingCompetitorUrl: prepared.filter((row) => !looksLikeValidUrl(row.competitorUrl)).length
+      }
     };
 
     if (preview) {

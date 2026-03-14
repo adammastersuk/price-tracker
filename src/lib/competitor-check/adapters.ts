@@ -135,6 +135,11 @@ function isYorkshireGardenCentresHost(raw: string): boolean {
   return /(^|\.)yorkshiregardencentres\.co\.uk$/i.test(normalizedHost);
 }
 
+function isBentsHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)bents\.co\.uk$/i.test(normalizedHost);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -1413,6 +1418,113 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
   }
 }
 
+
+class BentsAdapter implements CompetitorAdapter {
+  name = "bents-first-party";
+
+  supports(url: string) {
+    return isBentsHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+    if (!response.ok) throw new AdapterExtractionError(`Bents adapter failed: HTTP ${response.status}`);
+
+    const html = await response.text();
+
+    const priceBlockMatch = html.match(/<[^>]*(?:class=["'][^"']*productView-price[^"']*["']|data-product-price-with-tax|price--withTax)[^>]*>[\s\S]{0,3500}?<\/[^>]+>/i);
+    const priceBlock = priceBlockMatch?.[0] ?? html;
+
+    const checkedSelectors = [
+      ".productView-price .price--withTax",
+      "[data-product-price-with-tax]",
+      ".in-stock",
+      ".productView-delivery, .deliveryMessage, click-and-collect hints"
+    ];
+
+    const currentCandidates: Array<{ selector: string; text: string; parsed: number | null }> = [];
+    const selectorFound: Record<string, boolean> = {};
+
+    const currentPatterns = [
+      { selector: ".productView-price .price--withTax", pattern: /<[^>]*class=["'][^"']*price[^"']*price--withTax[^"']*["'][^>]*>([\s\S]*?)<\//gi },
+      { selector: "[data-product-price-with-tax]", pattern: /<[^>]*data-product-price-with-tax[^>]*>([\s\S]*?)<\//gi },
+      { selector: ".productView-price", pattern: /<[^>]*class=["'][^"']*productView-price[^"']*["'][^>]*>([\s\S]{0,2000}?)<\/[^>]+>/gi }
+    ];
+
+    for (const c of currentPatterns) {
+      const matches = [...priceBlock.matchAll(c.pattern)];
+      selectorFound[c.selector] = matches.length > 0;
+      for (const m of matches) {
+        const text = stripTags(m[1] ?? "");
+        const parsed = parseGbpCurrency(text);
+        if (text) currentCandidates.push({ selector: c.selector, text, parsed });
+      }
+    }
+
+    const acceptedCurrent = currentCandidates.find((c) => c.parsed !== null && c.parsed > 0) ?? null;
+
+    const allPriceTokens = [...priceBlock.matchAll(/(?:£|&pound;|GBP)\s?[\d,.]{1,12}/gi)]
+      .map((m) => ({ text: stripTags(m[0]), parsed: parseGbpCurrency(m[0]) }))
+      .filter((v) => v.parsed !== null) as Array<{ text: string; parsed: number }>;;
+    const sortedUnique = [...new Set(allPriceTokens.map((v) => v.parsed))].sort((a, b) => b - a);
+
+    const current = acceptedCurrent?.parsed ?? null;
+    const was = current === null ? null : (sortedUnique.find((v) => v > current) ?? null);
+    const promo = current !== null && was !== null && was > current ? current : null;
+
+    const savingsMatch = priceBlock.match(/save\s*(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i);
+    const savingsText = savingsMatch ? stripTags(savingsMatch[0]) : null;
+
+    const inStockMatch = html.match(/<[^>]*class=["'][^"']*\bin-stock\b[^"']*["'][^>]*>([\s\S]*?)<\//i);
+    selectorFound[".in-stock"] = Boolean(inStockMatch?.[1]);
+    const stockText = inStockMatch?.[1] ? stripTags(inStockMatch[1]) : stripTags(priceBlock);
+    const stock = /out\s+of\s+stock|sold\s+out|unavailable/i.test(stockText)
+      ? "Out of Stock"
+      : /in\s+stock|available/i.test(stockText)
+        ? "In Stock"
+        : "Unknown";
+
+    const availabilityMatches = [...html.matchAll(/(?:click\s*&\s*collect[^<]{0,120}|usually ready[^<]{0,120}|delivery[^<]{0,120})/gi)]
+      .slice(0, 6)
+      .map((m) => stripTags(m[0]))
+      .filter(Boolean);
+    selectorFound[".productView-delivery, .deliveryMessage, click-and-collect hints"] = availabilityMatches.length > 0;
+
+    if (current === null) {
+      throw new AdapterExtractionError(`Bents adapter could not extract current price. Selectors attempted: ${checkedSelectors.join(", ")}`, {
+        adapter_attempted: this.name,
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorFound,
+        candidate_values_found: currentCandidates,
+        availability_hints: availabilityMatches
+      });
+    }
+
+    return {
+      competitor_current_price: current,
+      competitor_promo_price: promo,
+      competitor_was_price: was,
+      competitor_stock_status: stock,
+      match_confidence: "High",
+      raw_price_text: acceptedCurrent?.text ?? String(current),
+      extraction_source: "bents_dom_adapter",
+      metadata: {
+        adapter_priority: "first_party",
+        extraction_method: "bents_product_page_dom",
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorFound,
+        candidate_values_found: currentCandidates,
+        accepted_selector: acceptedCurrent?.selector ?? null,
+        savings_text: savingsText,
+        availability_messages: availabilityMatches
+      }
+    };
+  }
+}
+
 export class MockCompetitorAdapter implements CompetitorAdapter {
   name = "mock";
 
@@ -1452,6 +1564,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (isWebbsHost(host)) return false;
     if (isSquiresHost(host)) return false;
     if (isYorkshireGardenCentresHost(host)) return false;
+    if (isBentsHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -1517,6 +1630,7 @@ export class RetailerPlaceholderAdapter implements CompetitorAdapter {
 }
 
 const adapters: CompetitorAdapter[] = [
+  new BentsAdapter(),
   new CharliesAdapter(),
   new WhitehallAdapter(),
   new GardenFurnitureWorldAdapter(),

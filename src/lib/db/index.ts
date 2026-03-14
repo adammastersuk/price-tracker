@@ -1,4 +1,4 @@
-import { CheckStatus, CompetitorListing, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
+import { CheckStatus, CompetitorListing, MonitorabilityCategory, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
 import { toNullablePlainObject, toPlainObject } from "@/lib/json";
 
@@ -16,9 +16,12 @@ interface ProductRecord {
   product_url: string | null;
   created_at: string;
   updated_at: string;
+  is_active?: boolean | null;
   competitor_prices?: CompetitorPriceRecord[];
   product_notes?: ProductNoteRecord[];
   price_history?: PriceHistoryRecord[];
+  product_cycle_history?: ProductCycleHistoryRecord[];
+  product_source_history?: ProductSourceHistoryRecord[];
 }
 
 interface CompetitorPriceRecord {
@@ -58,6 +61,40 @@ interface PriceHistoryRecord {
   suspicious_change_flag?: boolean | null;
   extraction_source?: string | null;
   extraction_metadata?: Record<string, unknown> | null;
+}
+
+
+interface ProductCycleHistoryRecord {
+  id: string;
+  product_id: string;
+  run_id?: string | null;
+  checked_at: string;
+  source_count: number;
+  success_count: number;
+  failed_count: number;
+  suspicious_count: number;
+  status: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+interface ProductSourceHistoryRecord {
+  id: string;
+  product_id: string;
+  cycle_id?: string | null;
+  source_type: string;
+  source_name: string;
+  source_url?: string | null;
+  checked_at: string;
+  status: string;
+  success: boolean;
+  current_price?: number | null;
+  previous_price?: number | null;
+  promo_price?: number | null;
+  was_price?: number | null;
+  stock_status?: string | null;
+  extraction_source?: string | null;
+  notes?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface BuyerRecord { id: string; name: string; is_active: boolean; created_at: string; updated_at: string; }
@@ -170,13 +207,34 @@ const defaultRuntimeSettings: RuntimeSettings = {
   }
 };
 
-const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
+const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*),product_cycle_history(*),product_source_history(*)";
 
 function isTrustworthyListing(comp: CompetitorListing): boolean {
   if (comp.lastCheckStatus !== "success") return false;
   if (comp.competitorCurrentPrice === null || !Number.isFinite(comp.competitorCurrentPrice) || comp.competitorCurrentPrice <= 0) return false;
   if ((comp.extractionMetadata?.trust_rejected as boolean | undefined) === true) return false;
   return true;
+}
+
+
+function buildMonitorability(product: ProductRecord, listings: CompetitorListing[]): { category: MonitorabilityCategory; label: string; reasons: string[]; isMonitorable: boolean; } {
+  const reasons: string[] = [];
+  const hasBentsUrl = Boolean(product.product_url && /^https?:\/\//i.test(product.product_url));
+  const validCompetitorListings = listings.filter((l) => /^https?:\/\//i.test(l.competitorProductUrl));
+  const hasCompetitorUrl = validCompetitorListings.length > 0;
+  const isInactive = product.is_active === false;
+
+  if (isInactive) reasons.push("Product is marked inactive");
+  if (!hasBentsUrl) reasons.push("Missing Bents URL");
+  if (!hasCompetitorUrl) reasons.push("Missing valid competitor URLs");
+
+  if (isInactive) return { category: "inactive", label: "Inactive", reasons, isMonitorable: false };
+  if (!hasBentsUrl) return { category: "missing_bents_url", label: "Missing Bents URL", reasons, isMonitorable: false };
+  if (!hasCompetitorUrl) return { category: "missing_competitor_urls", label: "Missing competitor URLs", reasons, isMonitorable: false };
+
+  const hasWarning = listings.some((l) => l.lastCheckStatus === "failed" || l.lastCheckStatus === "pending");
+  if (hasWarning) return { category: "partial", label: "Partially monitorable", reasons: ["Some sources are currently failing or pending"], isMonitorable: true };
+  return { category: "fully_monitorable", label: "Fully monitorable", reasons: [], isMonitorable: true };
 }
 
 function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
@@ -207,6 +265,57 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
     priceDifferencePercent: comp.price_difference_percent ?? null,
     pricingStatus: (comp.pricing_status as PricingStatus) ?? "Needs review"
   }));
+
+  const nowTs = Date.now();
+  const staleMs = (Number.parseFloat(process.env.NEXT_PUBLIC_STALE_CHECK_HOURS ?? "24") || 24) * 3600_000;
+  const sourceHistory = [...(product.product_source_history ?? [])].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
+  const cycleHistory = [...(product.product_cycle_history ?? [])].sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime());
+  const latestCycle = cycleHistory[0];
+  const lastFullCycle = cycleHistory.find((c) => c.failed_count === 0 && c.source_count > 0) ?? null;
+
+  const bentsSource = sourceHistory.find((s) => s.source_type === "bents") ?? null;
+  const competitorSourceHistory = sourceHistory.filter((s) => s.source_type === "competitor");
+  const competitorCheckedAt = competitorSourceHistory[0]?.checked_at ?? null;
+  const competitorTotal = competitorListings.length;
+  const competitorSuccess = competitorListings.filter((l) => l.lastCheckStatus === "success").length;
+  const competitorFailed = competitorListings.filter((l) => l.lastCheckStatus === "failed").length;
+  const competitorSuspicious = competitorListings.filter((l) => l.lastCheckStatus === "suspicious").length;
+  const competitorPending = competitorListings.filter((l) => l.lastCheckStatus === "pending").length;
+  const competitorStale = competitorCheckedAt ? (nowTs - new Date(competitorCheckedAt).getTime()) > staleMs : true;
+
+  const bentsCheckedAt = bentsSource?.checked_at ?? null;
+  const bentsStale = bentsCheckedAt ? (nowTs - new Date(bentsCheckedAt).getTime()) > staleMs : true;
+
+  const sourceHealthSummary = {
+    bents: {
+      success: bentsSource?.success ?? false,
+      checkedAt: bentsCheckedAt,
+      status: (bentsSource?.status as CheckStatus | undefined) ?? "pending",
+      stale: bentsStale,
+      notes: bentsSource?.notes ?? undefined
+    },
+    competitors: {
+      total: competitorTotal,
+      success: competitorSuccess,
+      failed: competitorFailed,
+      suspicious: competitorSuspicious,
+      pending: competitorPending,
+      stale: competitorStale,
+      lastCheckedAt: competitorCheckedAt
+    }
+  };
+
+  const cycleHealthSummary = {
+    lastCycleCheckedAt: latestCycle?.checked_at ?? null,
+    lastFullCheckAt: lastFullCycle?.checked_at ?? null,
+    successfulSources: latestCycle?.success_count ?? competitorSuccess + (bentsSource?.success ? 1 : 0),
+    failedSources: latestCycle?.failed_count ?? (bentsSource && !bentsSource.success ? 1 : 0) + competitorFailed,
+    totalSources: latestCycle?.source_count ?? competitorTotal + 1,
+    partialFailure: (latestCycle?.failed_count ?? 0) > 0,
+    stale: latestCycle?.checked_at ? (nowTs - new Date(latestCycle.checked_at).getTime()) > staleMs : true
+  };
+
+  const monitorability = buildMonitorability(product, competitorListings);
 
   const validListings = competitorListings.filter(isTrustworthyListing);
   const lowestValidListing = [...validListings].sort((a, b) =>
@@ -273,7 +382,10 @@ function mapToTrackedProductRow(product: ProductRecord): TrackedProductRow {
       checkedAt: h.captured_at ?? h.checked_at,
       bentsPrice: Number(product.bents_price ?? 0),
       competitorPrice: h.current_price ?? h.price
-    }))
+    })),
+    sourceHealth: sourceHealthSummary,
+    cycleHealth: cycleHealthSummary,
+    monitorability
   };
 }
 
@@ -404,6 +516,53 @@ export async function insertPriceHistory(input: {
     method: "POST",
     headers: { Prefer: "return=representation" },
     body: { ...input, extraction_metadata: toNullablePlainObject(input.extraction_metadata) }
+  });
+}
+
+
+
+export async function insertProductCycleHistory(input: {
+  product_id: string;
+  run_id?: string;
+  checked_at?: string;
+  source_count: number;
+  success_count: number;
+  failed_count: number;
+  suspicious_count: number;
+  status: CheckStatus;
+  metadata?: Record<string, unknown>;
+}) {
+  return supabaseRequest<ProductCycleHistoryRecord[]>({
+    table: "product_cycle_history",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: { ...input, metadata: toNullablePlainObject(input.metadata) }
+  });
+}
+
+export async function insertProductSourceHistory(input: {
+  product_id: string;
+  cycle_id?: string;
+  source_type: "bents" | "competitor";
+  source_name: string;
+  source_url?: string;
+  checked_at?: string;
+  status: CheckStatus;
+  success: boolean;
+  current_price?: number | null;
+  previous_price?: number | null;
+  promo_price?: number | null;
+  was_price?: number | null;
+  stock_status?: string;
+  extraction_source?: string;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  return supabaseRequest<ProductSourceHistoryRecord[]>({
+    table: "product_source_history",
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: { ...input, metadata: toNullablePlainObject(input.metadata) }
   });
 }
 
