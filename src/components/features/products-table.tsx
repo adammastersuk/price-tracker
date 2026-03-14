@@ -80,11 +80,11 @@ const defaultRowsPerPage = 20;
 const rowsPerPageStorageKey = "products-table-rows-per-page";
 
 const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
-  success: "bg-emerald-100 text-emerald-800",
-  suspicious: "bg-amber-100 text-amber-800",
-  failed: "bg-rose-100 text-rose-700",
+  success: "border border-emerald-200 bg-emerald-100 text-emerald-800",
+  suspicious: "border border-amber-200 bg-amber-100 text-amber-800",
+  failed: "border border-rose-200 bg-rose-100 text-rose-700",
   pending:
-    "bg-slate-100 text-slate-700 dark:bg-surface-hover/70 dark:text-slate-100",
+    "border border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-500/40 dark:bg-surface-hover/70 dark:text-slate-100",
 };
 
 const stockOptions: CompetitorStockStatus[] = [
@@ -95,9 +95,9 @@ const stockOptions: CompetitorStockStatus[] = [
 ];
 
 const buyerSignalTone = {
-  cheaper: "bg-rose-100 text-rose-700",
-  higher: "bg-emerald-100 text-emerald-800",
-  inline: "bg-sky-100 text-sky-800",
+  cheaper: "border border-rose-200 bg-rose-100 text-rose-700",
+  higher: "border border-emerald-200 bg-emerald-100 text-emerald-800",
+  inline: "border border-sky-200 bg-sky-100 text-sky-800",
 } as const;
 
 const checkedAtPill = (checkedAt: string | null) => {
@@ -111,8 +111,8 @@ const checkedAtPill = (checkedAt: string | null) => {
   return {
     label,
     tone: isOlderThanDay
-      ? "bg-rose-100 text-rose-700"
-      : "bg-emerald-100 text-emerald-800",
+      ? "border border-rose-200 bg-rose-100 text-rose-700"
+      : "border border-emerald-200 bg-emerald-100 text-emerald-800",
   };
 };
 
@@ -1343,14 +1343,14 @@ export function ProductsTable({
                           <p className="mt-1 text-xs text-text-secondary">
                             Diff vs Bents: {signal.diffLabel}
                           </p>
-                          <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
                             <span
-                              className={`rounded-full px-2 py-0.5 ${buyerSignalTone[signal.key]}`}
+                              className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2.5 py-0.5 leading-none ${buyerSignalTone[signal.key]}`}
                             >
                               {signal.label}
                             </span>
                             {checkedPill && (
-                              <span className={`rounded-full px-2 py-0.5 ${checkedPill.tone}`}>
+                              <span className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2.5 py-0.5 leading-none ${checkedPill.tone}`}>
                                 {checkedPill.label}
                               </span>
                             )}
@@ -1378,19 +1378,6 @@ export function ProductsTable({
                       }}
                     >
                       View
-                    </Button>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-text-secondary">{marginLabel(r)}</td>
-                  <td className="px-3 py-2">
-                    <Button
-                      type="button"
-                      className="px-2 py-1 text-xs"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedId(r.id);
-                      }}
-                    >
-                      Review
                     </Button>
                   </td>
                 </tr>

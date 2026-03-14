@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, ChevronRight } from "lucide-react";
 import { Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar, BarChart } from "recharts";
-import { safeReadJsonResponse } from "@/lib/json";
 import {
   dashboardStats,
   defaultFilters,
@@ -41,7 +40,6 @@ const PIE_COLORS = ["#2563eb", "#0ea5e9", "#f59e0b", "#ef4444"];
 export default function DashboardPage() {
   const [rows, setRows] = useState<TrackedProductRow[]>([]);
   const [filters, setFilters] = useState(defaultFilters);
-  const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<{ scrapeDefaults?: { staleCheckHours?: number } }>({});
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [configured, setConfigured] = useState<{ buyers: string[]; departments: string[]; competitors: string[]; buyerDepartments: Record<string, string[]> }>({ buyers: [], departments: [], competitors: [], buyerDepartments: {} });
@@ -160,18 +158,6 @@ export default function DashboardPage() {
     return [...counts.values()].sort((a, b) => b.opportunities - a.opportunities).slice(0, 6);
   }, [filteredRows]);
 
-  const onRefreshProduct = async (productId: string) => {
-    setRefreshingId(productId);
-    await fetch("/api/competitor/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds: [productId] })
-    });
-    const response = await fetch("/api/products", { cache: "no-store" });
-    const payload = await safeReadJsonResponse<{ data?: TrackedProductRow[] }>(response, {});
-    setRows(payload.data ?? []);
-    setRefreshingId(null);
-  };
 
   if (loadState === "loading") return <LoadingDashboardState />;
   if (loadState === "error") return <ErrorDashboardState retry={loadDashboard} />;
@@ -210,7 +196,7 @@ export default function DashboardPage() {
                 )}
               </InsightPanel>
 
-              <ProductsNeedingAttention rows={triageQueue} totalRows={queue.length} refreshingId={refreshingId} onRefreshProduct={onRefreshProduct} />
+              <ProductsNeedingAttention rows={triageQueue} totalRows={queue.length} />
             </div>
 
             <div className="space-y-3">
