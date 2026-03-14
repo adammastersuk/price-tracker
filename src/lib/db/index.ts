@@ -241,6 +241,7 @@ function mapToTrackedProductRow(
   product: ProductRecord,
   history?: { cycleHistory?: ProductCycleHistoryRecord[]; sourceHistory?: ProductSourceHistoryRecord[]; }
 ): TrackedProductRow {
+  const bentsPipelineDiagnosticsEnabled = process.env.LOG_BENTS_PIPELINE === "1";
   const sortedComps = [...(product.competitor_prices ?? [])].sort((a, b) =>
     new Date(b.last_checked_at).getTime() - new Date(a.last_checked_at).getTime()
   );
@@ -339,6 +340,28 @@ function mapToTrackedProductRow(
     partialFailure: (latestCycle?.failed_count ?? 0) > 0,
     stale: latestCycle?.checked_at ? (nowTs - new Date(latestCycle.checked_at).getTime()) > staleMs : true
   };
+
+  if (bentsPipelineDiagnosticsEnabled) {
+    console.info("[bents-latest-cycle-mapping]", {
+      productId: product.id,
+      sku: product.sku,
+      latestCycleId: latestCycle?.id ?? null,
+      latestCycleCheckedAt: latestCycle?.checked_at ?? null,
+      latestCycleSourceCount: latestCycleSources.length,
+      fallbackTimestampSourceCount: latestCycleSourcesByTimestamp.length,
+      effectiveCycleSourceCount: effectiveLatestCycleSources.length,
+      selectedBentsSource: bentsSource
+        ? {
+            id: bentsSource.id,
+            sourceType: bentsSource.source_type,
+            sourceName: bentsSource.source_name,
+            checkedAt: bentsSource.checked_at,
+            status: bentsSource.status,
+            success: bentsSource.success
+          }
+        : null
+    });
+  }
 
   const monitorability = buildMonitorability(product, competitorListings);
 
