@@ -95,6 +95,22 @@ const stockOptions: CompetitorStockStatus[] = [
   "Out of Stock",
   "Unknown",
 ];
+
+const monitorabilityTone: Record<TrackedProductRow["monitorability"]["category"], string> = {
+  fully_monitorable: "bg-emerald-100 text-emerald-800",
+  partial: "bg-amber-100 text-amber-800",
+  missing_bents_url: "bg-rose-100 text-rose-700",
+  missing_competitor_urls: "bg-rose-100 text-rose-700",
+  inactive: "bg-slate-200 text-slate-700"
+};
+
+function freshnessLabel(row: TrackedProductRow) {
+  if (row.cycleHealth.lastCycleCheckedAt) {
+    return `Last cycle: ${new Date(row.cycleHealth.lastCycleCheckedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  return "Last cycle: never";
+}
+
 const workflowOptions = [
   "Open",
   "Monitoring",
@@ -1392,6 +1408,10 @@ export function ProductsTable({
                             </p>
                           )}
                           <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
+                            <span className={`rounded-full px-2 py-0.5 ${monitorabilityTone[r.monitorability.category]}`}>{r.monitorability.label}</span>
+                            <span className={`rounded-full px-2 py-0.5 ${r.sourceHealth.bents.success ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700"}`}>Bents {r.sourceHealth.bents.success ? "ok" : "fail"}</span>
+                            <span className={`rounded-full px-2 py-0.5 ${r.cycleHealth.partialFailure ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{r.cycleHealth.successfulSources}/{r.cycleHealth.totalSources} sources</span>
+                            {r.cycleHealth.stale ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Stale data</span> : null}
                             {badges.hasLowest && (
                               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800">
                                 Lowest valid
@@ -1413,6 +1433,7 @@ export function ProductsTable({
                               {summary.extra}
                             </p>
                           )}
+                          <p className="text-xs text-text-muted">{freshnessLabel(r)} · {r.cycleHealth.lastFullCheckAt ? `Last full check ${new Date(r.cycleHealth.lastFullCheckAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No full check yet"}</p>
                         </>
                       );
                     })()}
@@ -1577,6 +1598,18 @@ export function ProductsTable({
                   Competitor prices are reference signals, not repricing
                   instructions.
                 </p>
+
+
+
+                <div className="rounded-lg border bg-card p-3 text-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Cycle health</p>
+                  <div className="mt-2 space-y-1 text-xs text-text-secondary">
+                    <p>{selected.monitorability.label}{selected.monitorability.reasons.length ? ` · ${selected.monitorability.reasons.join("; ")}` : ""}</p>
+                    <p>Bents check: {selected.sourceHealth.bents.status} {selected.sourceHealth.bents.checkedAt ? `(${new Date(selected.sourceHealth.bents.checkedAt).toLocaleString()})` : ""}</p>
+                    <p>Competitors: {selected.sourceHealth.competitors.success} success / {selected.sourceHealth.competitors.failed} failed / {selected.sourceHealth.competitors.total} total</p>
+                    <p>{selected.cycleHealth.partialFailure ? "Partial failure" : "No partial failure"} · {selected.cycleHealth.stale ? "Stale data" : "Fresh"}</p>
+                  </div>
+                </div>
 
                 <div className="rounded-lg border bg-card p-3 text-sm">
                   <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">

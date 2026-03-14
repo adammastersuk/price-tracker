@@ -7,7 +7,9 @@ import {
   updateCompetitorPrice,
   updateProduct,
   type CompetitorPriceInput,
-  getRuntimeSettings
+  getRuntimeSettings,
+  insertProductCycleHistory,
+  insertProductSourceHistory
 } from "@/lib/db";
 import { AdapterExtractionError, selectAdapter } from "@/lib/competitor-check/adapters";
 import {
@@ -477,7 +479,7 @@ async function updateProductFromCycle(target: RefreshTarget, bentsResult: Source
   }
 }
 
-async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; sourceResults: SourceCheckResult[]; }> {
+async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>, runId?: string): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; sourceResults: SourceCheckResult[]; }> {
   const checkedAt = new Date().toISOString();
   const bentsResult = await checkBentsSource(target, checkedAt);
   const sourceResults: SourceCheckResult[] = [bentsResult];
@@ -495,6 +497,48 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
   }
 
   await updateProductFromCycle(target, bentsResult, sourceResults);
+
+  try {
+    const cycleStatus: CheckStatus = sourceResults.some((s) => s.status === "failed")
+      ? "failed"
+      : sourceResults.some((s) => s.status === "suspicious")
+        ? "suspicious"
+        : sourceResults.every((s) => s.status === "success")
+          ? "success"
+          : "pending";
+    const cycle = await insertProductCycleHistory({
+      product_id: target.productId,
+      run_id: runId,
+      checked_at: checkedAt,
+      source_count: sourceResults.length,
+      success_count: sourceResults.filter((s) => s.status === "success").length,
+      failed_count: sourceResults.filter((s) => s.status === "failed").length,
+      suspicious_count: sourceResults.filter((s) => s.status === "suspicious").length,
+      status: cycleStatus,
+      metadata: { sku: target.sku, bentsUrl: target.bentsUrl }
+    });
+    const cycleId = cycle[0]?.id;
+    for (const source of sourceResults) {
+      await insertProductSourceHistory({
+        product_id: target.productId,
+        cycle_id: cycleId,
+        source_type: source.sourceType,
+        source_name: source.sourceName,
+        source_url: source.url,
+        checked_at: source.checkedAt,
+        status: source.status,
+        success: source.success,
+        current_price: source.currentPrice,
+        previous_price: source.previousPrice,
+        stock_status: source.stockStatus,
+        extraction_source: source.extractionSource,
+        notes: source.notes,
+        metadata: source.metadata
+      });
+    }
+  } catch (error) {
+    console.warn("Failed to persist cycle/source history", error);
+  }
 
   const failedReason = failures[0]?.reason ?? (!bentsResult.success ? (bentsResult.notes ?? "Bents source check failed") : undefined);
   return {
@@ -616,7 +660,7 @@ export async function processOneQueuedRefresh(runId: string): Promise<RefreshSum
   const started = Date.now();
   const failures: RefreshFailure[] = [];
 
-  const result = await processTarget(queued.target, runtime);
+  const result = await processTarget(queued.target, runtime, runId);
   if (result.failure) failures.push(result.failure);
 
   await updateRefreshRunItem(queued.queueItemId, {
