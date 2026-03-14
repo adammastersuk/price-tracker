@@ -77,6 +77,10 @@ type SortKey =
   | "workflow";
 type SortDirection = "asc" | "desc";
 
+const rowsPerPageOptions = [10, 20, 50] as const;
+const defaultRowsPerPage = 20;
+const rowsPerPageStorageKey = "products-table-rows-per-page";
+
 const statusTone: Record<CompetitorListing["lastCheckStatus"], string> = {
   success: "bg-emerald-100 text-emerald-800",
   suspicious: "bg-amber-100 text-amber-800",
@@ -311,6 +315,38 @@ const competitorSummary = (row: TrackedProductRow) => {
   };
 };
 
+const buildPaginationItems = (currentPage: number, totalPages: number) => {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, "ellipsis-right", totalPages] as const;
+  }
+
+  if (currentPage >= totalPages - 3) {
+    return [
+      1,
+      "ellipsis-left",
+      totalPages - 4,
+      totalPages - 3,
+      totalPages - 2,
+      totalPages - 1,
+      totalPages,
+    ] as const;
+  }
+
+  return [
+    1,
+    "ellipsis-left",
+    currentPage - 1,
+    currentPage,
+    currentPage + 1,
+    "ellipsis-right",
+    totalPages,
+  ] as const;
+};
+
 const competitorBadges = (row: TrackedProductRow) => {
   const suspicious = row.competitorListings.filter(
     (c) => c.lastCheckStatus === "suspicious",
@@ -411,6 +447,8 @@ export function ProductsTable({
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [savedViewName, setSavedViewName] = useState("");
   const [activeSavedViewId, setActiveSavedViewId] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(defaultRowsPerPage);
   const normalizedSelectedParam = (initialSelectedProductParam ?? "")
     .trim()
     .toLowerCase();
@@ -457,6 +495,18 @@ export function ProductsTable({
     loadSavedViews();
   }, []);
 
+  useEffect(() => {
+    const stored = window.localStorage.getItem(rowsPerPageStorageKey);
+    const parsed = Number(stored);
+    if (rowsPerPageOptions.includes(parsed as (typeof rowsPerPageOptions)[number])) {
+      setRowsPerPage(parsed);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(rowsPerPageStorageKey, String(rowsPerPage));
+  }, [rowsPerPage]);
+
   const sortedRows = useMemo(() => {
     const direction = sortDirection === "asc" ? 1 : -1;
     const nullRank = (value: number | null | undefined) =>
@@ -498,6 +548,21 @@ export function ProductsTable({
       }
     });
   }, [filteredRows, sortDirection, sortKey]);
+  const totalRows = sortedRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
+  const clampedPage = Math.min(currentPage, totalPages);
+  const pageStartIndex = totalRows === 0 ? 0 : (clampedPage - 1) * rowsPerPage;
+  const paginatedRows = sortedRows.slice(
+    pageStartIndex,
+    pageStartIndex + rowsPerPage,
+  );
+  const showingStart = totalRows === 0 ? 0 : pageStartIndex + 1;
+  const showingEnd =
+    totalRows === 0 ? 0 : Math.min(pageStartIndex + rowsPerPage, totalRows);
+  const paginationItems = useMemo(
+    () => buildPaginationItems(clampedPage, totalPages),
+    [clampedPage, totalPages],
+  );
   const values = useMemo(() => {
     const derived = uniqueValues(rows);
     return {
@@ -536,6 +601,16 @@ export function ProductsTable({
       return { ...prev, departments: pruned };
     });
   }, [availableDepartments]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters, sortKey, sortDirection, rowsPerPage]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const selected = useMemo(
     () => rows.find((r) => r.id === selectedId) ?? null,
@@ -938,11 +1013,11 @@ export function ProductsTable({
   const toggleAllVisible = (checked: boolean) => {
     if (checked) {
       setSelectedIds((prev) => [
-        ...new Set([...prev, ...sortedRows.map((row) => row.id)]),
+        ...new Set([...prev, ...paginatedRows.map((row) => row.id)]),
       ]);
       return;
     }
-    const visibleIds = new Set(sortedRows.map((row) => row.id));
+    const visibleIds = new Set(paginatedRows.map((row) => row.id));
     setSelectedIds((prev) => prev.filter((id) => !visibleIds.has(id)));
   };
 
@@ -1122,7 +1197,7 @@ export function ProductsTable({
       )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-text-secondary dark:text-text-secondary">
-          {sortedRows.length} products · {selectedIds.length} selected{" "}
+          {totalRows} products · {selectedIds.length} selected{" "}
           {visibleSelectedCount !== selectedIds.length
             ? `(visible ${visibleSelectedCount})`
             : ""}
@@ -1233,8 +1308,8 @@ export function ProductsTable({
                     type="checkbox"
                     aria-label="Select all visible rows"
                     checked={
-                      sortedRows.length > 0 &&
-                      sortedRows.every((row) => selectedIds.includes(row.id))
+                      paginatedRows.length > 0 &&
+                      paginatedRows.every((row) => selectedIds.includes(row.id))
                     }
                     onChange={(e) => toggleAllVisible(e.target.checked)}
                   />
@@ -1264,7 +1339,19 @@ export function ProductsTable({
               </tr>
             </thead>
             <tbody>
-              {sortedRows.map((r) => (
+              {paginatedRows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={9}
+                    className="px-3 py-10 text-center text-sm text-text-secondary"
+                  >
+                    {totalRows === 0
+                      ? "No products match the current filters."
+                      : "No products available on this page."}
+                  </td>
+                </tr>
+              ) : (
+                paginatedRows.map((r) => (
                 <tr
                   key={r.id}
                   className={`cursor-pointer border-t hover:bg-muted dark:hover:bg-surface-hover ${materialGap(r) ? "bg-amber-50/60 dark:bg-amber-900/25" : ""} ${selectedIds.includes(r.id) ? "ring-1 ring-sky-200 bg-sky-50/40 dark:ring-sky-500/40 dark:bg-sky-900/25" : ""}`}
@@ -1342,9 +1429,87 @@ export function ProductsTable({
                     <WorkflowChip status={r.actionWorkflowStatus} />
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
+        </div>
+        <div className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-text-secondary sm:text-sm">
+            <label
+              htmlFor="products-rows-per-page"
+              className="font-medium text-foreground"
+            >
+              View
+            </label>
+            <Select
+              id="products-rows-per-page"
+              aria-label="Rows per page"
+              value={String(rowsPerPage)}
+              onChange={(event) => {
+                setRowsPerPage(Number(event.target.value));
+                setCurrentPage(1);
+              }}
+              className="h-8 min-w-20 rounded-md px-2 text-xs sm:text-sm"
+            >
+              {rowsPerPageOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+            <p aria-live="polite" className="text-xs text-text-secondary sm:text-sm">
+              Showing {showingStart}–{showingEnd} of {totalRows} products
+            </p>
+          </div>
+          <nav
+            aria-label="Products table pagination"
+            className="flex items-center gap-1"
+          >
+            <button
+              type="button"
+              onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+              disabled={clampedPage === 1 || totalRows === 0}
+              className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs font-medium text-text-secondary transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              Previous
+            </button>
+            {paginationItems.map((item, index) =>
+              typeof item === "number" ? (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setCurrentPage(item)}
+                  aria-current={clampedPage === item ? "page" : undefined}
+                  className={`inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                    clampedPage === item
+                      ? "border-primary bg-primary text-white"
+                      : "border-border text-text-secondary hover:bg-muted"
+                  }`}
+                >
+                  {item}
+                </button>
+              ) : (
+                <span
+                  key={`${item}-${index}`}
+                  className="px-1 text-xs text-text-muted"
+                  aria-hidden="true"
+                >
+                  …
+                </span>
+              ),
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                setCurrentPage((prev) => Math.min(prev + 1, totalPages))
+              }
+              disabled={clampedPage === totalPages || totalRows === 0}
+              className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs font-medium text-text-secondary transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              Next
+            </button>
+          </nav>
         </div>
       </div>
       <div
