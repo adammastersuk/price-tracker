@@ -50,6 +50,12 @@ interface RefreshTarget {
     previousValidPrice: number | null;
     lastCheckedAt?: string;
   }>;
+  cycleTargets: Array<{
+    sourceType: "bents" | "competitor";
+    sourceName: string;
+    url: string;
+    mappingId?: string;
+  }>;
   refreshTier: "default" | "priority";
 }
 
@@ -93,6 +99,7 @@ export interface RefreshSummary {
 }
 
 const BENTS_DIAGNOSTICS_ENABLED = process.env.LOG_BENTS_DIAGNOSTICS === "1";
+const BENTS_PIPELINE_DIAGNOSTICS_ENABLED = process.env.LOG_BENTS_PIPELINE === "1";
 
 function normalizeSourceUrl(url: string): string {
   const trimmed = url.trim();
@@ -167,6 +174,20 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
       return true;
     });
 
+    const cycleTargets: RefreshTarget["cycleTargets"] = [
+      {
+        sourceType: "bents",
+        sourceName: "Bents",
+        url: product.bentsProductUrl ?? ""
+      },
+      ...filteredMappings.map((mapping) => ({
+        sourceType: "competitor" as const,
+        sourceName: mapping.competitor_name,
+        url: mapping.competitor_url ?? "",
+        mappingId: mapping.id
+      }))
+    ];
+
     if (!filteredMappings.length && !product.bentsProductUrl) {
       continue;
     }
@@ -179,6 +200,7 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
       costPrice: product.costPrice,
       bentsPrice: product.bentsRetailPrice,
       bentsUrl: product.bentsProductUrl,
+      cycleTargets,
       refreshTier,
       competitorMappings: filteredMappings.map((mapping) => ({
         mappingId: mapping.id,
@@ -232,7 +254,22 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
       });
     }
 
-    return {
+    if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED) {
+      console.info("[bents-adapter-result]", {
+        productId: target.productId,
+        sku: target.sku,
+        requestedUrl: normalizedBentsUrl || target.bentsUrl,
+        adapter: adapter.name,
+        currentPrice: result.competitor_current_price,
+        stockStatus: result.competitor_stock_status,
+        promoPrice: result.competitor_promo_price,
+        wasPrice: result.competitor_was_price,
+        extractionSource: result.extraction_source,
+        metadata: result.metadata ?? null
+      });
+    }
+
+    const sourceResult: SourceCheckResult = {
       sourceType: "bents",
       sourceName: "Bents",
       url: normalizedBentsUrl || target.bentsUrl,
@@ -250,6 +287,16 @@ async function checkBentsSource(target: RefreshTarget, checkedAt: string): Promi
         normalized_url: normalizedBentsUrl || null
       }
     };
+
+    if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED) {
+      console.info("[bents-source-check-result]", {
+        productId: target.productId,
+        sku: target.sku,
+        result: sourceResult
+      });
+    }
+
+    return sourceResult;
   } catch (error) {
     if (BENTS_DIAGNOSTICS_ENABLED) {
       console.warn("[bents-check-failed]", {
@@ -523,14 +570,23 @@ async function updateProductFromCycle(target: RefreshTarget, bentsResult: Source
 
 async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<typeof getRuntimeSettings>>, runId?: string): Promise<{ failure?: RefreshFailure; suspicious?: boolean; succeeded?: boolean; sourceResults: SourceCheckResult[]; }> {
   const checkedAt = new Date().toISOString();
-  const bentsResult = await checkBentsSource(target, checkedAt);
-  const sourceResults: SourceCheckResult[] = [bentsResult];
+  const sourceResults: SourceCheckResult[] = [];
+  let bentsResult: SourceCheckResult | null = null;
 
   const failures: RefreshFailure[] = [];
   let hadCompetitorSuccess = false;
   let suspicious = false;
 
-  for (const mapping of target.competitorMappings) {
+  for (const cycleTarget of target.cycleTargets) {
+    if (cycleTarget.sourceType === "bents") {
+      bentsResult = await checkBentsSource(target, checkedAt);
+      sourceResults.push(bentsResult);
+      continue;
+    }
+
+    const mapping = target.competitorMappings.find((candidate) => candidate.mappingId === cycleTarget.mappingId);
+    if (!mapping) continue;
+
     const checked = await checkCompetitorSource(target, mapping, runtime, checkedAt);
     sourceResults.push(checked.result);
     if (checked.failure) failures.push(checked.failure);
@@ -538,7 +594,12 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
     if (checked.suspicious) suspicious = true;
   }
 
-  await updateProductFromCycle(target, bentsResult, sourceResults);
+  const ensuredBentsResult = bentsResult ?? await checkBentsSource(target, checkedAt);
+  if (!bentsResult) {
+    sourceResults.unshift(ensuredBentsResult);
+  }
+
+  await updateProductFromCycle(target, ensuredBentsResult, sourceResults);
 
   if (runId) {
     console.info("[product-refresh] executed product cycle", {
@@ -547,7 +608,7 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
       sku: target.sku,
       sourceCount: sourceResults.length,
       bentsInvoked: true,
-      bentsStatus: bentsResult.status,
+      bentsStatus: ensuredBentsResult.status,
       competitorSourceCount: sourceResults.filter((source) => source.sourceType === "competitor").length
     });
   }
@@ -576,7 +637,7 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
     });
     const cycleId = cycle[0]?.id;
     for (const source of sourceResults) {
-      await insertProductSourceHistory({
+      const insertedRows = await insertProductSourceHistory({
         product_id: target.productId,
         cycle_id: cycleId,
         source_type: source.sourceType,
@@ -592,6 +653,22 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
         notes: source.notes,
         metadata: source.metadata
       });
+
+      if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED && source.sourceType === "bents") {
+        const inserted = insertedRows[0];
+        console.info("[bents-source-history-inserted]", {
+          runId: runId ?? null,
+          productId: target.productId,
+          sku: target.sku,
+          cycleId: cycleId ?? null,
+          insertedRowId: inserted?.id ?? null,
+          sourceType: inserted?.source_type ?? source.sourceType,
+          sourceName: inserted?.source_name ?? source.sourceName,
+          status: inserted?.status ?? source.status,
+          success: inserted?.success ?? source.success,
+          currentPrice: inserted?.current_price ?? source.currentPrice
+        });
+      }
     }
 
     if (runId) {
@@ -606,16 +683,31 @@ async function processTarget(target: RefreshTarget, runtime: Awaited<ReturnType<
         bentsIncluded: sourceResults.some((source) => source.sourceType === "bents")
       });
     }
+
+    if (BENTS_PIPELINE_DIAGNOSTICS_ENABLED) {
+      const bentsPersisted = sourceResults.find((source) => source.sourceType === "bents") ?? null;
+      console.info("[bents-cycle-count-classification]", {
+        runId: runId ?? null,
+        productId: target.productId,
+        sku: target.sku,
+        cycleId: cycleId ?? null,
+        cycleSourceCount: sourceResults.length,
+        cycleSuccessCount,
+        cycleFailedCount,
+        cycleSuspiciousCount,
+        bentsResult: bentsPersisted
+      });
+    }
   } catch (error) {
     console.warn("Failed to persist cycle/source history", error);
   }
 
-  const failedReason = failures[0]?.reason ?? (!bentsResult.success ? (bentsResult.notes ?? "Bents source check failed") : undefined);
+  const failedReason = failures[0]?.reason ?? (!ensuredBentsResult.success ? (ensuredBentsResult.notes ?? "Bents source check failed") : undefined);
   return {
     sourceResults,
     failure: failedReason ? { productId: target.productId, sku: target.sku, competitorUrl: failures[0]?.competitorUrl ?? target.bentsUrl, reason: failedReason } : undefined,
     suspicious,
-    succeeded: bentsResult.success || hadCompetitorSuccess
+    succeeded: ensuredBentsResult.success || hadCompetitorSuccess
   };
 }
 
@@ -635,7 +727,7 @@ export async function enqueueCompetitorRefresh(options: RefreshOptions = {}): Pr
         run_id: runId,
         product_id: target.productId,
         status: "queued",
-        competitor_name: "Bents + competitors",
+        competitor_name: "Product cycle",
         competitor_url: target.bentsUrl,
         metadata: { target }
       });
@@ -678,7 +770,24 @@ async function readQueuedTarget(runId: string): Promise<QueuedTarget | null> {
       bentsPrice: Number(target.bentsPrice ?? 0),
       bentsUrl: target.bentsUrl ?? row.competitor_url ?? "",
       refreshTier: target.refreshTier === "priority" ? "priority" : "default",
-      competitorMappings: Array.isArray(target.competitorMappings) ? target.competitorMappings : []
+      competitorMappings: Array.isArray(target.competitorMappings) ? target.competitorMappings : [],
+      cycleTargets: Array.isArray(target.cycleTargets)
+        ? target.cycleTargets
+        : [
+            {
+              sourceType: "bents",
+              sourceName: "Bents",
+              url: target.bentsUrl ?? row.competitor_url ?? ""
+            },
+            ...(Array.isArray(target.competitorMappings)
+              ? target.competitorMappings.map((mapping) => ({
+                  sourceType: "competitor" as const,
+                  sourceName: mapping.competitorName ?? "Unknown competitor",
+                  url: mapping.competitorUrl ?? "",
+                  mappingId: mapping.mappingId
+                }))
+              : [])
+          ]
     }
   };
 }
