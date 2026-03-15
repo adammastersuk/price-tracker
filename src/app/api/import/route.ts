@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSettingsConfig, insertPriceHistory, upsertCompetitorPrice, upsertProductBySku } from "@/lib/db";
 import { canonicalizeDomain, looksLikeValidUrl, withAliases } from "@/lib/matching";
 import { logActivity } from "@/lib/operations";
+import { calculateBentsMarginPercent } from "@/lib/pricing";
 
 interface ParsedRow {
   rowNumber: number;
@@ -79,11 +80,6 @@ function parseCsv(csvText: string): ParseResult {
   }
 
   return { rows, skipped, errors };
-}
-
-function calculateMarginPercent(bentsPrice: number, cost?: number): number | undefined {
-  if (!Number.isFinite(cost) || !Number.isFinite(bentsPrice) || bentsPrice <= 0) return undefined;
-  return Number((((bentsPrice - Number(cost)) / bentsPrice) * 100).toFixed(2));
 }
 
 function pickMappedValue(raw: string | undefined, map: Map<string, string>) {
@@ -200,7 +196,7 @@ export async function POST(request: NextRequest) {
           supplier: row.supplier,
           department: row.department,
           cost_price: row.cost,
-          margin_percent: calculateMarginPercent(row.bentsPrice, row.cost)
+          margin_percent: calculateBentsMarginPercent(row.bentsPrice, row.cost) ?? undefined
         });
 
         const productId = upserted[0].id;

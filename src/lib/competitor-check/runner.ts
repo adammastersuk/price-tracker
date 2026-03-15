@@ -1,4 +1,5 @@
 import { derivePricingStatus } from "@/lib/pricing-logic";
+import { calculateBentsMarginPercent } from "@/lib/pricing";
 import {
   getProducts,
   getCompetitorPrices,
@@ -534,9 +535,7 @@ async function updateProductFromCycle(target: RefreshTarget, bentsResult: Source
   const latestBentsPrice = bentsResult.success && bentsResult.currentPrice !== null
     ? bentsResult.currentPrice
     : target.bentsPrice;
-  const marginPercent = target.costPrice === null || latestBentsPrice <= 0
-    ? null
-    : Number((((latestBentsPrice - target.costPrice) / latestBentsPrice) * 100).toFixed(2));
+  const marginPercent = calculateBentsMarginPercent(latestBentsPrice, target.costPrice);
 
   await updateProduct(target.productId, {
     bents_price: latestBentsPrice,
