@@ -12,6 +12,7 @@ export interface AdapterResult {
   competitor_promo_price: number | null;
   competitor_was_price: number | null;
   competitor_stock_status: string;
+  result_status?: "ok" | "out_of_stock" | "removed" | "adapter_error";
   match_confidence: MatchConfidence;
   raw_price_text?: string;
   extraction_source?: string;
@@ -41,6 +42,134 @@ function parseGbpCurrency(value: string): number | null {
   const gbpMatch = decodeHtmlEntities(value).match(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i);
   if (!gbpMatch) return null;
   return parseCurrencyLike(gbpMatch[0]);
+}
+
+
+type WebbsPageClassification = "product" | "category" | "search" | "home" | "not_found" | "unknown";
+
+interface WebbsPageDiagnostics {
+  pageClassification: WebbsPageClassification;
+  looksLikeProductPage: boolean;
+  removedLikely: boolean;
+  removalReason: string;
+  stock: "In Stock" | "Limited Stock" | "Out of Stock" | "Unknown";
+}
+
+export function normalizeComparableUrl(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    const path = parsed.pathname.replace(/\/+$/, "") || "/";
+    return `${normalizeHostname(parsed.hostname)}${path.toLowerCase()}`;
+  } catch {
+    return raw.trim().toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+function pathFromUrl(raw: string): string {
+  try {
+    return new URL(raw).pathname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function canonicalUrlFromHtml(html: string): string | null {
+  const canonicalMatch = html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["'][^>]*>/i);
+  return canonicalMatch?.[1]?.trim() || null;
+}
+
+function looksLikeWebbsProductPath(path: string): boolean {
+  if (!path || path === "/") return false;
+  return /\/$/.test(path) && !/(\/search|\/category|\/categories|\/collections|\/brand|\/brands|\/shop|\/garden-water-features\/?$)/i.test(path);
+}
+
+function stockFromWebbsHtml(html: string): "In Stock" | "Limited Stock" | "Out of Stock" | "Unknown" {
+  return /\bout\s+of\s+stock\b/i.test(html)
+    ? "Out of Stock"
+    : /\blimited\s+stock\b/i.test(html)
+      ? "Limited Stock"
+      : /\bin\s+stock\b/i.test(html)
+        ? "In Stock"
+        : "Unknown";
+}
+
+export function classifyWebbsPage(input: { html: string; originalUrl: string; finalUrl: string; httpStatus: number; redirected: boolean; }): WebbsPageDiagnostics {
+  const { html, originalUrl, finalUrl, httpStatus, redirected } = input;
+  const text = stripTags(html).toLowerCase();
+  const finalPath = pathFromUrl(finalUrl);
+  const canonical = canonicalUrlFromHtml(html);
+  const canonicalPath = canonical ? pathFromUrl(canonical) : "";
+
+  const hasProductJsonLd = /"@type"\s*:\s*"Product"/i.test(html);
+  const hasProductTitle = /<(h1|meta)[^>]*(product|name|og:title)[^>]*>/i.test(html) || /<h1[^>]*>[^<]{3,}<\/h1>/i.test(html);
+  const hasAddToCart = /add\s*to\s*(basket|cart)|buy\s*now/i.test(text);
+  const hasPriceSignal = /(?:£|&pound;|GBP)\s*\d/.test(html) || /itemprop=["']price["']/i.test(html);
+
+  const looksLikeProductPage = hasProductJsonLd || ((hasProductTitle || hasAddToCart) && hasPriceSignal);
+
+  const notFoundSignal = httpStatus === 404 || httpStatus === 410 || /product\s+not\s+found|no\s+longer\s+available|discontinued|page\s+not\s+found|404/i.test(text);
+  if (notFoundSignal) {
+    return {
+      pageClassification: "not_found",
+      looksLikeProductPage: false,
+      removedLikely: true,
+      removalReason: "Product no longer available at retailer",
+      stock: "Out of Stock"
+    };
+  }
+
+  const isHome = finalPath === "/";
+  const isSearch = /\/search/i.test(finalPath) || /\bsearch\b/i.test(text);
+  const isCategory = /\/(garden-water-features|category|categories|collections|shop|brand|brands)\/?$/i.test(finalPath);
+
+  const pageClassification: WebbsPageClassification = looksLikeProductPage
+    ? "product"
+    : isHome
+      ? "home"
+      : isSearch
+        ? "search"
+        : isCategory
+          ? "category"
+          : "unknown";
+
+  const originalPath = pathFromUrl(originalUrl);
+  const sameProductCanonical = Boolean(canonical && canonicalPath && normalizeComparableUrl(canonical) === normalizeComparableUrl(originalUrl));
+  const sameProductUrl = normalizeComparableUrl(finalUrl) === normalizeComparableUrl(originalUrl) || sameProductCanonical;
+
+  const redirectedToNonProduct = redirected && !sameProductUrl && !looksLikeProductPage && pageClassification !== "unknown";
+  const originalLookedLikeProduct = looksLikeWebbsProductPath(originalPath);
+
+  return {
+    pageClassification,
+    looksLikeProductPage,
+    removedLikely: Boolean(originalLookedLikeProduct && redirectedToNonProduct),
+    removalReason: redirectedToNonProduct
+      ? "Original URL redirected to a non-product page"
+      : "",
+    stock: stockFromWebbsHtml(html)
+  };
+}
+
+function buildWebbsRemovedResult(input: { originalUrl: string; finalUrl: string; redirectChain: string[]; httpStatus: number; pageClassification: WebbsPageClassification; reason: string; }): AdapterResult {
+  return {
+    competitor_current_price: null,
+    competitor_promo_price: null,
+    competitor_was_price: null,
+    competitor_stock_status: "Out of Stock",
+    result_status: "removed",
+    match_confidence: "High",
+    raw_price_text: input.reason,
+    extraction_source: "webbs_removed_product",
+    metadata: {
+      adapter_attempted: "webbs",
+      original_url: input.originalUrl,
+      final_url: input.finalUrl,
+      redirect_chain: input.redirectChain,
+      final_http_status: input.httpStatus,
+      page_classification: input.pageClassification,
+      result_message: `${input.reason}. Last known values may be stale`
+    }
+  };
 }
 
 interface PriceCandidate {
@@ -1040,8 +1169,43 @@ class WebbsAdapter implements CompetitorAdapter {
       cache: "no-store"
     });
 
+    const originalUrl = input.competitorUrl;
+    const finalUrl = response.url || input.competitorUrl;
+    const redirected = normalizeComparableUrl(originalUrl) !== normalizeComparableUrl(finalUrl);
+    const redirectChain = redirected ? [originalUrl, finalUrl] : [originalUrl];
+
+    if (response.status === 404 || response.status === 410) {
+      return buildWebbsRemovedResult({
+        originalUrl,
+        finalUrl,
+        redirectChain,
+        httpStatus: response.status,
+        pageClassification: "not_found",
+        reason: "Product no longer available at retailer"
+      });
+    }
+
     if (!response.ok) throw new AdapterExtractionError(`Webbs adapter failed: HTTP ${response.status}`);
     const html = await response.text();
+
+    const pageDiagnostics = classifyWebbsPage({
+      html,
+      originalUrl,
+      finalUrl,
+      httpStatus: response.status,
+      redirected
+    });
+
+    if (pageDiagnostics.removedLikely) {
+      return buildWebbsRemovedResult({
+        originalUrl,
+        finalUrl,
+        redirectChain,
+        httpStatus: response.status,
+        pageClassification: pageDiagnostics.pageClassification,
+        reason: pageDiagnostics.removalReason
+      });
+    }
 
     const checkedSelectors = [
       'span[data-bind*="text: price"]',
@@ -1112,6 +1276,42 @@ class WebbsAdapter implements CompetitorAdapter {
         : null;
 
       if (!fallbackAccepted || fallbackAccepted.parsed === null) {
+        if (!pageDiagnostics.looksLikeProductPage) {
+          return buildWebbsRemovedResult({
+            originalUrl,
+            finalUrl,
+            redirectChain,
+            httpStatus: response.status,
+            pageClassification: pageDiagnostics.pageClassification,
+            reason: "Original URL redirected to a non-product page"
+          });
+        }
+
+        if (pageDiagnostics.stock === "Out of Stock") {
+          return {
+            competitor_current_price: null,
+            competitor_promo_price: null,
+            competitor_was_price: null,
+            competitor_stock_status: "Out of Stock",
+            result_status: "out_of_stock",
+            match_confidence: "Medium",
+            raw_price_text: "Out of stock product page detected but no active price found",
+            extraction_source: "webbs_product_page_out_of_stock",
+            metadata: {
+              adapter_attempted: this.name,
+              original_url: originalUrl,
+              final_url: finalUrl,
+              redirect_chain: redirectChain,
+              final_http_status: response.status,
+              page_classification: pageDiagnostics.pageClassification,
+              selectors_checked: checkedSelectors,
+              selectors_found: selectorsFound,
+              candidate_values_found: candidateValues,
+              result_message: "Product appears out of stock and no active price was found"
+            }
+          };
+        }
+
         throw new AdapterExtractionError(
           `Webbs price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}. Candidate values: ${candidateValues.map((candidate) => `${candidate.source_selector}=${candidate.extracted_text}`).join(" | ") || "none"}`,
           {
@@ -1135,8 +1335,9 @@ class WebbsAdapter implements CompetitorAdapter {
           : /\blimited\s+stock\b/i.test(html)
             ? "Limited Stock"
             : /\bin\s+stock\b/i.test(html)
-              ? "In Stock"
-              : "Unknown",
+            ? "In Stock"
+            : "Unknown",
+        result_status: /\bout\s+of\s+stock\b/i.test(html) ? "out_of_stock" : "ok",
         match_confidence: "Medium",
         raw_price_text: fallbackAccepted.extracted_text,
         extraction_source: "webbs_paypal_fallback",
@@ -1145,6 +1346,11 @@ class WebbsAdapter implements CompetitorAdapter {
           extracted_text: fallbackAccepted.extracted_text,
           source_selector: fallbackAccepted.source_selector,
           adapter_attempted: this.name,
+          original_url: originalUrl,
+          final_url: finalUrl,
+          redirect_chain: redirectChain,
+          final_http_status: response.status,
+          page_classification: pageDiagnostics.pageClassification,
           matched_hostname: hostFromUrl(input.competitorUrl),
           normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
           selectors_checked: checkedSelectors,
@@ -1171,6 +1377,7 @@ class WebbsAdapter implements CompetitorAdapter {
       competitor_promo_price: null,
       competitor_was_price: null,
       competitor_stock_status: stock,
+      result_status: stock === "Out of Stock" ? "out_of_stock" : "ok",
       match_confidence: "High",
       raw_price_text: accepted.extracted_text,
       extraction_source: "webbs_selector_adapter",
@@ -1179,6 +1386,11 @@ class WebbsAdapter implements CompetitorAdapter {
         extracted_text: accepted.extracted_text,
         source_selector: accepted.source_selector,
         adapter_attempted: this.name,
+        original_url: originalUrl,
+        final_url: finalUrl,
+        redirect_chain: redirectChain,
+        final_http_status: response.status,
+        page_classification: pageDiagnostics.pageClassification,
         matched_hostname: hostFromUrl(input.competitorUrl),
         normalized_hostname: normalizeHostname(hostFromUrl(input.competitorUrl) || ""),
         selectors_checked: checkedSelectors,
