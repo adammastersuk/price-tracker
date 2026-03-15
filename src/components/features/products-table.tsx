@@ -20,6 +20,7 @@ import {
 import { exportProductsCsv } from "@/lib/csv";
 import { currency, pct } from "@/lib/utils";
 import { materialGap } from "@/lib/pricing-logic";
+import { calculateBentsMarginPercent } from "@/lib/pricing";
 import {
   CompetitorListing,
   CompetitorStockStatus,
@@ -271,6 +272,17 @@ const diagnosticsWarnings = (listing: CompetitorListing): string[] => {
 
 const marginLabel = (row: TrackedProductRow) =>
   row.marginPercent === null ? "Margin unavailable" : pct(row.marginPercent);
+
+const matchedMarginLabel = (row: TrackedProductRow) => {
+  const lowest = lowestTrustedListing(row);
+  const matchedPriceIncVat = lowest?.competitorCurrentPrice ?? null;
+  const matchedMarginPercent = calculateBentsMarginPercent(
+    matchedPriceIncVat,
+    row.costPrice,
+  );
+
+  return matchedMarginPercent === null ? "-" : pct(matchedMarginPercent);
+};
 
 const competitorCardPriceLabel = (listing: CompetitorListing) => {
   if (listing.competitorCurrentPrice !== null)
@@ -1281,6 +1293,7 @@ export function ProductsTable({
                   </th>
                 ))}
                 <th className="px-3 py-2">Margin</th>
+                <th className="px-3 py-2">Matched Margin</th>
                 <th className="px-3 py-2">Action</th>
               </tr>
             </thead>
@@ -1288,7 +1301,7 @@ export function ProductsTable({
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     className="px-3 py-10 text-center text-sm text-text-secondary"
                   >
                     {loadError
@@ -1368,6 +1381,7 @@ export function ProductsTable({
                     <PricingStatusChip status={r.pricingStatus} />
                   </td>
                   <td className="px-3 py-2 text-xs text-text-secondary">{marginLabel(r)}</td>
+                  <td className="px-3 py-2 text-xs text-text-secondary">{matchedMarginLabel(r)}</td>
                   <td className="px-3 py-2">
                     <Button
                       type="button"
