@@ -311,6 +311,7 @@ async function saveFailure(target: RefreshTarget, mappingId: string | undefined,
     extraction_source: `${selectedAdapter}_failed`,
     extraction_metadata: {
       trust_rejected: true,
+      result_status: "adapter_error",
       failure_reason: reason,
       ...(diagnostics ?? {})
     }
@@ -361,21 +362,24 @@ async function checkCompetitorSource(
       brand: target.brand
     });
 
-    const reasons = suspiciousReason(
-      {
-        bentsPrice: target.bentsPrice,
-        previousPrice: mapping.previousPrice,
-        previousValidPrice: mapping.previousValidPrice,
-        competitorUrl: mapping.competitorUrl
-      },
-      fetched,
-      {
-        low: runtime.toleranceSettings.suspiciousLowPriceThresholdPercent,
-        high: runtime.toleranceSettings.suspiciousHighPriceThresholdPercent
-      }
-    );
+    const resultStatus = fetched.result_status ?? (fetched.competitor_stock_status === "Out of Stock" ? "out_of_stock" : "ok");
+    const reasons = resultStatus === "ok"
+      ? suspiciousReason(
+          {
+            bentsPrice: target.bentsPrice,
+            previousPrice: mapping.previousPrice,
+            previousValidPrice: mapping.previousValidPrice,
+            competitorUrl: mapping.competitorUrl
+          },
+          fetched,
+          {
+            low: runtime.toleranceSettings.suspiciousLowPriceThresholdPercent,
+            high: runtime.toleranceSettings.suspiciousHighPriceThresholdPercent
+          }
+        )
+      : [];
 
-    const suspicious = reasons.length > 0;
+    const suspicious = resultStatus === "ok" && reasons.length > 0;
     const acceptedCurrentPrice = suspicious ? mapping.previousValidPrice : fetched.competitor_current_price;
     const diff = acceptedCurrentPrice === null ? null : Number((target.bentsPrice - (acceptedCurrentPrice ?? 0)).toFixed(2));
     const diffPct = acceptedCurrentPrice === null || acceptedCurrentPrice === 0
@@ -387,6 +391,15 @@ async function checkCompetitorSource(
       competitorStockStatus: fetched.competitor_stock_status as "In Stock" | "Low Stock" | "Out of Stock" | "Unknown",
       priceDifferencePercent: diffPct
     }, runtime.toleranceSettings.inLinePricingTolerancePercent);
+
+    const removedMessage = resultStatus === "removed"
+      ? typeof fetched.metadata?.result_message === "string"
+        ? fetched.metadata.result_message
+        : "Product no longer available at retailer. Last known values may be stale"
+      : "";
+    const outOfStockMessage = resultStatus === "out_of_stock" && fetched.competitor_current_price === null
+      ? "Product appears out of stock at retailer"
+      : "";
 
     const payload: CompetitorPriceInput = {
       product_id: target.productId,
@@ -403,12 +416,13 @@ async function checkCompetitorSource(
       last_check_status: suspicious ? "suspicious" : "success",
       check_error_message: suspicious
         ? `Suspicious extraction detected. Previous valid price retained for review. ${reasons.join(" ")}`
-        : "",
+        : removedMessage || outOfStockMessage,
       raw_price_text: fetched.raw_price_text,
       extraction_source: fetched.extraction_source,
       suspicious_change_flag: suspicious,
       extraction_metadata: {
         ...(fetched.metadata ?? {}),
+        result_status: resultStatus,
         trust_rejected: suspicious,
         accepted_current_price: acceptedCurrentPrice,
         extracted_current_price: fetched.competitor_current_price,
@@ -442,6 +456,7 @@ async function checkCompetitorSource(
         extraction_source: fetched.extraction_source,
         extraction_metadata: {
           ...(fetched.metadata ?? {}),
+          result_status: resultStatus,
           trust_rejected: suspicious,
           trust_warnings: reasons
         }
@@ -471,7 +486,7 @@ async function checkCompetitorSource(
         success: true,
         status: suspicious ? "suspicious" : "success",
         checkedAt,
-        notes: suspicious ? reasons.join(" ") : "",
+        notes: suspicious ? reasons.join(" ") : removedMessage || outOfStockMessage,
         extractionSource: fetched.extraction_source,
         metadata: fetched.metadata
       },
