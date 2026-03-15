@@ -1,6 +1,7 @@
 import { CheckStatus, CompetitorListing, MonitorabilityCategory, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
 import { toNullablePlainObject, toPlainObject } from "@/lib/json";
+import { calculateBentsMarginPercent } from "@/lib/pricing";
 
 interface ProductRecord {
   id: string;
@@ -380,9 +381,7 @@ function mapToTrackedProductRow(
       : summaryListing.competitorName
     : "No competitor mapping";
 
-  const computedMargin = product.cost_price === null || product.bents_price <= 0
-    ? null
-    : Number((((product.bents_price - product.cost_price) / product.bents_price) * 100).toFixed(2));
+  const computedMargin = calculateBentsMarginPercent(product.bents_price, product.cost_price);
 
   return {
     id: product.id,

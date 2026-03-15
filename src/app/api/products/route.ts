@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createProduct, deleteProduct, findProductBySku, getProductById, getProducts, mergeProducts, updateProduct } from "@/lib/db";
 import { normalizeBuyerDepartmentAndCompetitor } from "@/lib/settings-normalizers";
 import { logActivity } from "@/lib/operations";
+import { calculateBentsMarginPercent } from "@/lib/pricing";
 
 function isDuplicateKeyError(errorMessage: string): boolean {
   return errorMessage.includes("duplicate key") || errorMessage.includes("23505");
@@ -73,9 +74,7 @@ export async function PUT(request: NextRequest) {
       : Number.isFinite(updates.cost_price)
         ? Number(updates.cost_price)
         : existing.costPrice;
-    const marginPercent = cost === null || bents <= 0
-      ? null
-      : Number((((bents - cost) / bents) * 100).toFixed(2));
+    const marginPercent = calculateBentsMarginPercent(bents, cost);
 
     const updated = await updateProduct(payload.id, { ...updates, buyer: normalized.buyer, department: normalized.department, sku: requestedSku, margin_percent: marginPercent });
     await logActivity({ event_type: "product_updated", entity_type: "product", entity_id: payload.id, summary: `Product updated: ${requestedSku}` });
