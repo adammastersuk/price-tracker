@@ -1064,9 +1064,120 @@ function snippetAroundFirstOccurrence(html: string, token: string, radius = 120)
   return html.slice(start, end).replace(/\s+/g, " ").trim();
 }
 
-function parseStockFromText(value: string): "In Stock" | "Unknown" {
-  if (/\bin\s+stock\b/i.test(value)) return "In Stock";
-  return "Unknown";
+function extractCharliesCartControls(html: string): Array<{ control: string; disabled: boolean }> {
+  const controls: Array<{ control: string; disabled: boolean }> = [];
+  const patterns = [/<button\b[^>]*>[\s\S]*?<\/button>/gi, /<input\b[^>]*>/gi, /<a\b[^>]*>[\s\S]*?<\/a>/gi];
+
+  const collectControl = (controlHtml: string, textSource = controlHtml) => {
+    const controlText = normalizeWhitespace(stripTags(textSource)).toLowerCase();
+    if (!/\b(add\s+to\s+basket|add\s+to\s+cart|buy\s+now)\b/i.test(controlText)) return;
+
+    const disabled =
+      /\bdisabled\b/i.test(controlHtml) ||
+      /aria-disabled\s*=\s*["']?true["']?/i.test(controlHtml) ||
+      /\b(?:is-|btn-)?disabled\b/i.test(controlHtml) ||
+      /\b(?:sold\s*out|out\s+of\s+stock|unavailable)\b/i.test(controlText);
+
+    controls.push({ control: controlText, disabled });
+  };
+
+  for (const pattern of patterns) {
+    for (const match of html.matchAll(pattern)) {
+      const tag = match[0];
+      if (tag.startsWith("<input")) {
+        const valueMatch = tag.match(/\bvalue\s*=\s*["']([^"']+)["']/i);
+        collectControl(tag, valueMatch?.[1] ?? tag);
+      } else {
+        collectControl(tag);
+      }
+    }
+  }
+
+  return controls;
+}
+
+function detectCharliesStockStatus(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
+  diagnostics: {
+    hasVisibleInStockText: boolean;
+    hasVisibleLowStockText: boolean;
+    hasVisibleOutOfStockText: boolean;
+    hasVisibleUnavailableText: boolean;
+    hasEnabledAddToBasket: boolean;
+    hasDisabledAddToBasket: boolean;
+    hasVisibleQuantityInput: boolean;
+    hasActivePurchaseForm: boolean;
+    hasUnavailableFormState: boolean;
+    stockContainerText: string;
+    matchedAddToBasketControls: number;
+  };
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const cartControls = extractCharliesCartControls(visibleHtml);
+
+  const stockContainerMatches = [
+    ...visibleHtml.matchAll(/<[^>]*class=["'][^"']*\b(?:stock-message|stock|inventory|availability|product-stock|stock-label)\b[^"']*["'][^>]*>([\s\S]*?)<\//gi)
+  ];
+  const stockContainerText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[1] ?? "")).join(" ")).toLowerCase();
+  const normalizedStockText = normalizeWhitespace(`${stockContainerText} ${visibleText}`.trim());
+
+  const hasVisibleInStockText = /\bin\s+stock\b/.test(normalizedStockText);
+  const hasVisibleLowStockText = /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(normalizedStockText);
+  const hasVisibleOutOfStockText = /\bout\s+of\s+stock\b|\bsold\s+out\b/.test(normalizedStockText);
+  const hasVisibleUnavailableText = /\bunavailable\b|\bcurrently\s+unavailable\b/.test(normalizedStockText);
+
+  const hasEnabledAddToBasket = cartControls.some((control) => !control.disabled);
+  const hasDisabledAddToBasket = cartControls.some((control) => control.disabled);
+
+  const hasVisibleQuantityInput =
+    /<input\b[^>]*(?:name\s*=\s*["']qty|name\s*=\s*["']quantity|id\s*=\s*["'][^"']*(?:qty|quantity)|class\s*=\s*["'][^"']*(?:qty|quantity)|type\s*=\s*["']number["'])[^>]*>/i.test(visibleHtml) &&
+    !/<input\b[^>]*(?:name\s*=\s*["']qty|name\s*=\s*["']quantity|id\s*=\s*["'][^"']*(?:qty|quantity)|class\s*=\s*["'][^"']*(?:qty|quantity)|type\s*=\s*["']number["'])[^>]*\bdisabled\b/i.test(visibleHtml);
+
+  const hasActivePurchaseForm =
+    /<form\b[^>]*>(?=[\s\S]{0,2000}(?:add\s*to\s*(?:basket|cart)|buy\s*now))[\s\S]*?<\/form>/i.test(visibleHtml) &&
+    !/<form\b[^>]*\b(?:data-available|data-product-in-stock|data-instock)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml) &&
+    !/<form\b[^>]*\b(?:unavailable|sold-?out|out-of-stock)\b[^>]*>/i.test(visibleHtml);
+
+  const hasUnavailableFormState =
+    /<form\b[^>]*\b(?:data-available|data-product-in-stock|data-instock)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml) ||
+    /<[^>]*class=["'][^"']*\b(?:out-of-stock|sold-out|unavailable|not-available)\b[^"']*["'][^>]*>/i.test(visibleHtml);
+
+  const diagnostics = {
+    hasVisibleInStockText,
+    hasVisibleLowStockText,
+    hasVisibleOutOfStockText,
+    hasVisibleUnavailableText,
+    hasEnabledAddToBasket,
+    hasDisabledAddToBasket,
+    hasVisibleQuantityInput,
+    hasActivePurchaseForm,
+    hasUnavailableFormState,
+    stockContainerText,
+    matchedAddToBasketControls: cartControls.length
+  };
+
+  if ((hasDisabledAddToBasket || hasUnavailableFormState) && (hasVisibleOutOfStockText || hasVisibleUnavailableText) && !hasEnabledAddToBasket) {
+    return { stock: "Out of Stock", diagnostics };
+  }
+
+  if (hasVisibleLowStockText) {
+    return { stock: "Low Stock", diagnostics };
+  }
+
+  if (hasVisibleInStockText) {
+    return { stock: "In Stock", diagnostics };
+  }
+
+  if (hasEnabledAddToBasket || (hasVisibleQuantityInput && hasActivePurchaseForm)) {
+    return { stock: "In Stock", diagnostics };
+  }
+
+  if (hasVisibleOutOfStockText || hasVisibleUnavailableText || hasUnavailableFormState || hasDisabledAddToBasket) {
+    return { stock: "Out of Stock", diagnostics };
+  }
+
+  return { stock: "Unknown", diagnostics };
 }
 
 function findPurchaseArea(html: string) {
@@ -1138,11 +1249,11 @@ class CharliesAdapter implements CompetitorAdapter {
     }
 
     const purchaseArea = findPurchaseArea(html);
-    const stockText = purchaseArea.text.match(/\bin\s+stock\b/i)?.[0] ?? "";
+    const charliesStockDetection = detectCharliesStockStatus(html);
 
     const accepted = candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0) ?? null;
     if (!accepted || accepted.parsed === null) {
-      const failureMessage = `${stockText ? "Stock detected but no valid price found" : "Charlies adapter could not find price selector"}. Selectors attempted: ${checkedSelectors.join(", ")}`;
+      const failureMessage = `${charliesStockDetection.stock !== "Unknown" ? "Stock detected but no valid price found" : "Charlies adapter could not find price selector"}. Selectors attempted: ${checkedSelectors.join(", ")}`;
       throw new AdapterExtractionError(failureMessage, {
         adapter_attempted: this.name,
         selectors_checked: checkedSelectors,
@@ -1151,7 +1262,8 @@ class CharliesAdapter implements CompetitorAdapter {
         accepted_value: null,
         rejected_values: candidateValues,
         rejection_reasons: ["required_price_selector_missing_or_invalid"],
-        stock_text_found: stockText || null,
+        stock_text_found: charliesStockDetection.diagnostics.stockContainerText || null,
+        stock_diagnostics: charliesStockDetection.diagnostics,
         purchase_area_detected: purchaseArea.found
       });
     }
@@ -1163,7 +1275,7 @@ class CharliesAdapter implements CompetitorAdapter {
       competitor_current_price: accepted.parsed,
       competitor_promo_price: null,
       competitor_was_price: wasPrice,
-      competitor_stock_status: parseStockFromText(stockText),
+      competitor_stock_status: charliesStockDetection.stock === "Low Stock" ? "In Stock" : charliesStockDetection.stock,
       match_confidence: "High",
       raw_price_text: accepted.extracted_text,
       extraction_source: "charlies_selector_adapter",
@@ -1171,7 +1283,8 @@ class CharliesAdapter implements CompetitorAdapter {
         extraction_method: "deterministic_selector",
         extracted_text: accepted.extracted_text,
         source_selector: accepted.source_selector,
-        stock_text_found: stockText || null,
+        stock_text_found: charliesStockDetection.diagnostics.stockContainerText || null,
+        stock_diagnostics: charliesStockDetection.diagnostics,
         adapter_attempted: this.name,
         selectors_checked: checkedSelectors,
         selectors_found: selectorDiagnostics,
