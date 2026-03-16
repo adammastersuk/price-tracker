@@ -477,6 +477,177 @@ function detectYorkshireStockStatus(html: string): {
   };
 }
 
+function extractWhitehallCartControls(html: string): Array<{ control: string; disabled: boolean }> {
+  const controls: Array<{ control: string; disabled: boolean }> = [];
+  const controlPatterns = [/<button\b[^>]*>[\s\S]*?<\/button>/gi, /<input\b[^>]*>/gi, /<a\b[^>]*>[\s\S]*?<\/a>/gi];
+
+  const collectControl = (controlHtml: string, textSource = controlHtml) => {
+    const controlText = normalizeWhitespace(stripTags(textSource)).toLowerCase();
+    if (!/\b(add\s+to\s+cart|add\s+to\s+basket|buy\s+now|pre-?order)\b/i.test(controlText)) return;
+
+    const classMatch = controlHtml.match(/\bclass\s*=\s*["']([^"']+)["']/i);
+    const classValue = classMatch?.[1]?.toLowerCase() ?? "";
+    const disabled =
+      /\bdisabled\b/i.test(controlHtml) ||
+      /aria-disabled\s*=\s*["']?true["']?/i.test(controlHtml) ||
+      /\b(?:is-|btn-)?disabled\b/.test(classValue);
+
+    controls.push({ control: controlText, disabled });
+  };
+
+  for (const pattern of controlPatterns) {
+    for (const match of html.matchAll(pattern)) {
+      const tag = match[0];
+      if (tag.startsWith("<input")) {
+        const valueMatch = tag.match(/\bvalue\s*=\s*["']([^"']+)["']/i);
+        collectControl(tag, valueMatch?.[1] ?? tag);
+      } else {
+        collectControl(tag);
+      }
+    }
+  }
+
+  return controls;
+}
+
+function detectWhitehallStockStatus(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
+  diagnostics: {
+    hasVisibleInStockText: boolean;
+    hasVisibleLowStockText: boolean;
+    hasVisibleOutOfStockText: boolean;
+    hasUnavailableFormState: boolean;
+    hasAvailableFormState: boolean;
+    hasEnabledAddToCart: boolean;
+    hasDisabledAddToCart: boolean;
+    stockContainerText: string;
+    matchedAddToCartControls: number;
+  };
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const cartControls = extractWhitehallCartControls(visibleHtml);
+
+  const stockContainerMatches = [...visibleHtml.matchAll(/<[^>]*class=["'][^"']*\b(?:stock-display|low-stock|stock|inventory|product-form__inventory)\b[^"']*["'][^>]*>([\s\S]*?)<\//gi)];
+  const stockContainerText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[1] ?? "")).join(" ")).toLowerCase();
+
+  const hasVisibleInStockText = /\bin\s+stock\b/.test(stockContainerText) || /\bin\s+stock\b/.test(visibleText);
+  const hasVisibleLowStockText =
+    /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(stockContainerText) ||
+    /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(visibleText);
+  const hasVisibleOutOfStockText = /\bout\s+of\s+stock\b|\bsold\s+out\b|\bunavailable\b/.test(stockContainerText || visibleText);
+
+  const hasUnavailableFormState =
+    /<form\b[^>]*\b(?:data-product-in-stock|data-available)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml) ||
+    /<form\b[^>]*\b(?:unavailable|sold-?out)\b[^>]*>/i.test(visibleHtml);
+  const hasAvailableFormState =
+    /<form\b[^>]*\b(?:data-product-in-stock|data-available)\s*=\s*["']?true["']?[^>]*>/i.test(visibleHtml) ||
+    /<form\b[^>]*\b(?:available|in-stock)\b[^>]*>/i.test(visibleHtml);
+
+  const hasEnabledAddToCart = cartControls.some((control) => !control.disabled);
+  const hasDisabledAddToCart = cartControls.some((control) => control.disabled);
+
+  if ((hasDisabledAddToCart || hasUnavailableFormState) && hasVisibleOutOfStockText && !hasEnabledAddToCart && !hasAvailableFormState) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasUnavailableFormState,
+        hasAvailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        stockContainerText,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasVisibleLowStockText) {
+    return {
+      stock: "Low Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasUnavailableFormState,
+        hasAvailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        stockContainerText,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasVisibleInStockText || hasAvailableFormState) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasUnavailableFormState,
+        hasAvailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        stockContainerText,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasEnabledAddToCart && !hasUnavailableFormState) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasUnavailableFormState,
+        hasAvailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        stockContainerText,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (!hasEnabledAddToCart && (hasVisibleOutOfStockText || hasUnavailableFormState || hasDisabledAddToCart)) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasUnavailableFormState,
+        hasAvailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        stockContainerText,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  return {
+    stock: "Unknown",
+    diagnostics: {
+      hasVisibleInStockText,
+      hasVisibleLowStockText,
+      hasVisibleOutOfStockText,
+      hasUnavailableFormState,
+      hasAvailableFormState,
+      hasEnabledAddToCart,
+      hasDisabledAddToCart,
+      stockContainerText,
+      matchedAddToCartControls: cartControls.length
+    }
+  };
+}
+
 function parseWooCommerceAmount(value: string): number | null {
   const normalized = decodeHtmlEntities(value)
     .replace(/\u00a0/g, " ")
@@ -644,12 +815,11 @@ class WhitehallAdapter implements CompetitorAdapter {
     const saleText = saleMatch?.[1] ? stripTags(saleMatch[1]) : "";
     selectorsFound["p.product-details-price__regular-price--sale"] = Boolean(saleText);
 
-    const purchaseArea = findPurchaseArea(html);
-    const stockText = purchaseArea.text.match(/\bin\s+stock\b/i)?.[0] ?? "";
+    const { stock, diagnostics: stockDiagnostics } = detectWhitehallStockStatus(html);
 
     const salePrice = parseCurrencyLike(saleText);
     if (salePrice === null) {
-      const failureMessage = stockText ? "Stock detected but no valid price found" : "Whitehall sale price selector missing";
+      const failureMessage = stock !== "Unknown" ? "Stock detected but no valid price found" : "Whitehall sale price selector missing";
       throw new AdapterExtractionError(failureMessage, {
         adapter_attempted: this.name,
         selectors_checked: checkedSelectors,
@@ -658,8 +828,8 @@ class WhitehallAdapter implements CompetitorAdapter {
         accepted_value: null,
         rejected_values: saleText ? [{ source_selector: "p.product-details-price__regular-price--sale", extracted_text: saleText, parsed: salePrice }] : [],
         rejection_reasons: ["required_sale_price_selector_missing_or_invalid"],
-        stock_text_found: stockText || null,
-        purchase_area_detected: purchaseArea.found
+        stock_text_found: stock !== "Unknown" ? stock : null,
+        stock_diagnostics: stockDiagnostics
       });
     }
 
@@ -672,7 +842,7 @@ class WhitehallAdapter implements CompetitorAdapter {
       competitor_current_price: salePrice,
       competitor_promo_price: null,
       competitor_was_price: wasPrice,
-      competitor_stock_status: parseStockFromText(stockText),
+      competitor_stock_status: stock,
       match_confidence: "High",
       raw_price_text: saleText,
       extraction_source: "whitehall_selector_adapter",
@@ -680,7 +850,8 @@ class WhitehallAdapter implements CompetitorAdapter {
         extraction_method: "deterministic_selector",
         extracted_text: saleText,
         source_selector: "p.product-details-price__regular-price--sale",
-        stock_text_found: stockText || null,
+        stock_text_found: stock,
+        stock_diagnostics: stockDiagnostics,
         adapter_attempted: this.name,
         selectors_checked: checkedSelectors,
         selectors_found: selectorsFound,
@@ -690,9 +861,7 @@ class WhitehallAdapter implements CompetitorAdapter {
         ],
         accepted_value: salePrice,
         rejected_values: [],
-        rejection_reasons: [],
-        purchase_area_detected: purchaseArea.found,
-        purchase_area_source: purchaseArea.source
+        rejection_reasons: []
       }
     };
   }
