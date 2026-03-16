@@ -84,13 +84,195 @@ function looksLikeWebbsProductPath(path: string): boolean {
 }
 
 function stockFromWebbsHtml(html: string): "In Stock" | "Limited Stock" | "Out of Stock" | "Unknown" {
-  return /\bout\s+of\s+stock\b/i.test(html)
-    ? "Out of Stock"
-    : /\blimited\s+stock\b/i.test(html)
-      ? "Limited Stock"
-      : /\bin\s+stock\b/i.test(html)
-        ? "In Stock"
-        : "Unknown";
+  const detectedStock = detectWebbsStockStatus(html).stock;
+  return detectedStock === "Low Stock" ? "Limited Stock" : detectedStock;
+}
+
+function extractWebbsCartControls(html: string): Array<{ control: string; disabled: boolean }> {
+  const controls: Array<{ control: string; disabled: boolean }> = [];
+  const buttonRe = /<button\b[^>]*>[\s\S]*?<\/button>/gi;
+  const inputRe = /<input\b[^>]*>/gi;
+
+  const collectControl = (controlHtml: string, textSource = controlHtml) => {
+    const controlText = normalizeWhitespace(stripTags(textSource)).toLowerCase();
+    const isPurchaseCta = /\b(add\s+to\s+basket|add\s+to\s+cart|buy\s+now)\b/i.test(controlText);
+    if (!isPurchaseCta) return;
+
+    const disabled =
+      /\bdisabled\b/i.test(controlHtml) ||
+      /aria-disabled\s*=\s*["']?true["']?/i.test(controlHtml) ||
+      /\b(?:is-|btn-)?disabled\b/i.test(controlHtml) ||
+      /\b(?:sold\s*out|out\s+of\s+stock|unavailable)\b/i.test(controlText);
+
+    controls.push({ control: controlText, disabled });
+  };
+
+  for (const buttonMatch of html.matchAll(buttonRe)) {
+    collectControl(buttonMatch[0]);
+  }
+
+  for (const inputMatch of html.matchAll(inputRe)) {
+    const tag = inputMatch[0];
+    const valueMatch = tag.match(/\bvalue\s*=\s*["']([^"']+)["']/i);
+    collectControl(tag, valueMatch?.[1] ?? tag);
+  }
+
+  return controls;
+}
+
+function detectWebbsStockStatus(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
+  diagnostics: {
+    hasVisibleInStockText: boolean;
+    hasVisibleLowStockText: boolean;
+    hasVisibleOutOfStockText: boolean;
+    hasEnabledAddToBasket: boolean;
+    hasDisabledAddToBasket: boolean;
+    hasVisibleQuantityInput: boolean;
+    hasActivePurchaseForm: boolean;
+    hasUnavailablePurchaseContainer: boolean;
+    visibleStockText: string;
+    matchedAddToBasketControls: number;
+  };
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const cartControls = extractWebbsCartControls(visibleHtml);
+
+  const stockContainerMatches = [
+    ...visibleHtml.matchAll(/<[^>]*class=["'][^"']*\b(?:stock|inventory|availability|product-stock|stock-label)\b[^"']*["'][^>]*>([\s\S]*?)<\//gi)
+  ];
+  const visibleStockText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[1] ?? "")).join(" ")).toLowerCase();
+
+  const hasVisibleInStockText = /\bin\s+stock\b/.test(visibleStockText) || /\bin\s+stock\b/.test(visibleText);
+  const hasVisibleLowStockText =
+    /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(visibleStockText) ||
+    /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(visibleText);
+  const hasVisibleOutOfStockText =
+    /\bout\s+of\s+stock\b|\bsold\s+out\b/.test(visibleStockText) ||
+    /\bout\s+of\s+stock\b|\bsold\s+out\b/.test(visibleText);
+
+  const hasEnabledAddToBasket = cartControls.some((control) => !control.disabled);
+  const hasDisabledAddToBasket = cartControls.some((control) => control.disabled);
+
+  const hasVisibleQuantityInput =
+    /<input\b[^>]*(?:name\s*=\s*["']qty|name\s*=\s*["']quantity|id\s*=\s*["'][^"']*qty|id\s*=\s*["'][^"']*quantity|class\s*=\s*["'][^"']*qty|class\s*=\s*["'][^"']*quantity)[^>]*>/i.test(visibleHtml) &&
+    !/<input\b[^>]*(?:name\s*=\s*["']qty|name\s*=\s*["']quantity|id\s*=\s*["'][^"']*qty|id\s*=\s*["'][^"']*quantity|class\s*=\s*["'][^"']*qty|class\s*=\s*["'][^"']*quantity)[^>]*\bdisabled\b/i.test(visibleHtml);
+
+  const hasActivePurchaseForm =
+    /<form\b[^>]*>(?=[\s\S]{0,1500}(?:add\s*to\s*(?:basket|cart)|buy\s*now))[\s\S]*?<\/form>/i.test(visibleHtml) &&
+    !/<form\b[^>]*\b(?:data-available|data-product-in-stock)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml) &&
+    !/<form\b[^>]*\b(?:unavailable|sold-?out)\b[^>]*>/i.test(visibleHtml);
+
+  const hasUnavailablePurchaseContainer =
+    /<[^>]*class=["'][^"']*(?:out-of-stock|sold-out|unavailable|not-available)[^"']*["'][^>]*>/i.test(visibleHtml) ||
+    /<form\b[^>]*\b(?:data-available|data-product-in-stock)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml);
+
+  if ((hasDisabledAddToBasket || hasUnavailablePurchaseContainer) && hasVisibleOutOfStockText && !hasEnabledAddToBasket) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActivePurchaseForm,
+        hasUnavailablePurchaseContainer,
+        visibleStockText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasVisibleLowStockText) {
+    return {
+      stock: "Low Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActivePurchaseForm,
+        hasUnavailablePurchaseContainer,
+        visibleStockText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasVisibleInStockText) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActivePurchaseForm,
+        hasUnavailablePurchaseContainer,
+        visibleStockText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasEnabledAddToBasket || (hasVisibleQuantityInput && hasActivePurchaseForm)) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActivePurchaseForm,
+        hasUnavailablePurchaseContainer,
+        visibleStockText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasVisibleOutOfStockText || hasUnavailablePurchaseContainer || hasDisabledAddToBasket) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActivePurchaseForm,
+        hasUnavailablePurchaseContainer,
+        visibleStockText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  return {
+    stock: "Unknown",
+    diagnostics: {
+      hasVisibleInStockText,
+      hasVisibleLowStockText,
+      hasVisibleOutOfStockText,
+      hasEnabledAddToBasket,
+      hasDisabledAddToBasket,
+      hasVisibleQuantityInput,
+      hasActivePurchaseForm,
+      hasUnavailablePurchaseContainer,
+      visibleStockText,
+      matchedAddToBasketControls: cartControls.length
+    }
+  };
 }
 
 export function classifyWebbsPage(input: { html: string; originalUrl: string; finalUrl: string; httpStatus: number; redirected: boolean; }): WebbsPageDiagnostics {
@@ -778,6 +960,7 @@ class CharliesAdapter implements CompetitorAdapter {
         selectors_found: selectorDiagnostics,
         candidate_values_found: candidateValues,
         accepted_value: accepted.parsed,
+
         rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
         rejection_reasons: [],
         purchase_area_detected: purchaseArea.found,
@@ -1555,6 +1738,7 @@ class WebbsAdapter implements CompetitorAdapter {
       httpStatus: response.status,
       redirected
     });
+    const { stock: webbsStock, diagnostics: webbsStockDiagnostics } = detectWebbsStockStatus(html);
 
     if (pageDiagnostics.removedLikely) {
       return buildWebbsRemovedResult({
@@ -1647,7 +1831,7 @@ class WebbsAdapter implements CompetitorAdapter {
           });
         }
 
-        if (pageDiagnostics.stock === "Out of Stock") {
+        if (webbsStock === "Out of Stock") {
           return {
             competitor_current_price: null,
             competitor_promo_price: null,
@@ -1664,6 +1848,7 @@ class WebbsAdapter implements CompetitorAdapter {
               redirect_chain: redirectChain,
               final_http_status: response.status,
               page_classification: pageDiagnostics.pageClassification,
+              stock_diagnostics: webbsStockDiagnostics,
               selectors_checked: checkedSelectors,
               selectors_found: selectorsFound,
               candidate_values_found: candidateValues,
@@ -1686,18 +1871,14 @@ class WebbsAdapter implements CompetitorAdapter {
         );
       }
 
+      const fallbackStock = webbsStock === "Low Stock" ? "Limited Stock" : webbsStock;
+
       return {
         competitor_current_price: fallbackAccepted.parsed,
         competitor_promo_price: null,
         competitor_was_price: null,
-        competitor_stock_status: /\bout\s+of\s+stock\b/i.test(html)
-          ? "Out of Stock"
-          : /\blimited\s+stock\b/i.test(html)
-            ? "Limited Stock"
-            : /\bin\s+stock\b/i.test(html)
-            ? "In Stock"
-            : "Unknown",
-        result_status: /\bout\s+of\s+stock\b/i.test(html) ? "out_of_stock" : "ok",
+        competitor_stock_status: fallbackStock,
+        result_status: fallbackStock === "Out of Stock" ? "out_of_stock" : "ok",
         match_confidence: "Medium",
         raw_price_text: fallbackAccepted.extracted_text,
         extraction_source: "webbs_paypal_fallback",
@@ -1717,6 +1898,7 @@ class WebbsAdapter implements CompetitorAdapter {
           selectors_found: selectorsFound,
           candidate_values_found: candidateValues,
           accepted_value: fallbackAccepted.parsed,
+          stock_diagnostics: webbsStockDiagnostics,
           rejected_values: candidateValues.filter((candidate) => candidate.source_selector !== fallbackAccepted.source_selector),
           rejection_reasons: []
         }
@@ -1724,13 +1906,7 @@ class WebbsAdapter implements CompetitorAdapter {
     }
 
     selectorsFound["#pp_flex[data-pp-amount]"] = false;
-    const stock = /\bout\s+of\s+stock\b/i.test(html)
-      ? "Out of Stock"
-      : /\blimited\s+stock\b/i.test(html)
-        ? "Limited Stock"
-        : /\bin\s+stock\b/i.test(html)
-          ? "In Stock"
-          : "Unknown";
+    const stock = webbsStock === "Low Stock" ? "Limited Stock" : webbsStock;
 
     return {
       competitor_current_price: accepted.parsed,
@@ -1757,6 +1933,7 @@ class WebbsAdapter implements CompetitorAdapter {
         selectors_found: selectorsFound,
         candidate_values_found: candidateValues,
         accepted_value: accepted.parsed,
+        stock_diagnostics: webbsStockDiagnostics,
         rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
         rejection_reasons: []
       }
