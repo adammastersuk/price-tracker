@@ -168,6 +168,7 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
       : runtime.scrapeDefaults.defaultRefreshFrequencyHours;
 
     const filteredMappings = mappings.filter((mapping) => {
+      if (!mapping.competitor_url?.trim()) return false;
       if (options.competitorListingIds?.length && !options.competitorListingIds.includes(mapping.id)) return false;
       if (options.scheduleMode && options.scheduleMode !== "manual") {
         if (options.scheduleMode === "priority" && refreshTier !== "priority") return false;

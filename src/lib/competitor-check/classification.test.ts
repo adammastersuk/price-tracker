@@ -96,15 +96,17 @@ test("comparison eligibility excludes out_of_stock and url_unavailable", () => {
   assert.equal(isInStockForComparison({ ...base, competitorCurrentPrice: 10, competitorStockStatus: "In Stock" }), true);
   assert.equal(isInStockForComparison({ ...base, competitorCurrentPrice: 10, competitorStockStatus: "Out of Stock" }), false);
   assert.equal(isInStockForComparison({ ...base, competitorCurrentPrice: 10, competitorStockStatus: "URL Unavailable" }), false);
+  assert.equal(isInStockForComparison({ ...base, competitorCurrentPrice: 10, competitorStockStatus: "Not tracked" }), false);
 });
 
-test("listing order is in_stock -> out_of_stock -> url_unavailable -> unknown/failed", () => {
+test("listing order is in_stock -> out_of_stock -> url_unavailable -> unknown/failed -> not_tracked", () => {
   const items = [
     { competitorStockStatus: "Unknown", lastCheckStatus: "success" as const },
     { competitorStockStatus: "Out of Stock", lastCheckStatus: "success" as const },
     { competitorStockStatus: "URL Unavailable", lastCheckStatus: "success" as const },
     { competitorStockStatus: "In Stock", lastCheckStatus: "success" as const },
-    { competitorStockStatus: "In Stock", lastCheckStatus: "failed" as const }
+    { competitorStockStatus: "In Stock", lastCheckStatus: "failed" as const },
+    { competitorStockStatus: "Not tracked", lastCheckStatus: "success" as const }
   ];
 
   const sorted = [...items].sort((a, b) => listingSortWeight(a as never) - listingSortWeight(b as never));
@@ -113,6 +115,7 @@ test("listing order is in_stock -> out_of_stock -> url_unavailable -> unknown/fa
     "success:Out of Stock",
     "success:URL Unavailable",
     "success:Unknown",
-    "failed:In Stock"
+    "failed:In Stock",
+    "success:Not tracked"
   ]);
 });

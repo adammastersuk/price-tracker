@@ -79,5 +79,6 @@ export function listingSortWeight(listing: Pick<CompetitorListing, "competitorSt
   if (listing.competitorStockStatus === "In Stock" || listing.competitorStockStatus === "Low Stock") return 1;
   if (listing.competitorStockStatus === "Out of Stock") return 2;
   if (listing.competitorStockStatus === "URL Unavailable") return 3;
+  if (listing.competitorStockStatus === "Not tracked") return 5;
   return 4;
 }

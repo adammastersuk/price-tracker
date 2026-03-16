@@ -3,84 +3,10 @@ import { getSettingsConfig, insertPriceHistory, upsertCompetitorPrice, upsertPro
 import { canonicalizeDomain, looksLikeValidUrl, withAliases } from "@/lib/matching";
 import { logActivity } from "@/lib/operations";
 import { calculateBentsMarginPercent } from "@/lib/pricing";
+import { parseCsv } from "./parse";
 
-interface ParsedRow {
-  rowNumber: number;
-  sku: string;
-  productName: string;
-  bentsPrice: number;
-  bentsUrl: string;
-  competitorName: string;
-  competitorUrl: string;
-  buyer?: string;
-  supplier?: string;
-  department?: string;
-  cost?: number;
-}
-
-interface ParseResult { rows: ParsedRow[]; skipped: number; errors: string[]; }
 interface RowMessage { rowNumber: number; message: string; }
 
-const REQUIRED_HEADERS = ["SKU", "product_name", "Bents_price", "Bents_URL", "competitor_name", "competitor_URL"];
-const HEADER_INDEX: Record<string, keyof Omit<ParsedRow, "rowNumber">> = {
-  SKU: "sku",
-  product_name: "productName",
-  Bents_price: "bentsPrice",
-  Bents_URL: "bentsUrl",
-  competitor_name: "competitorName",
-  competitor_URL: "competitorUrl",
-  buyer: "buyer",
-  supplier: "supplier",
-  department: "department",
-  cost: "cost"
-};
-
-function parseCsv(csvText: string): ParseResult {
-  const lines = csvText.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) {
-    return { rows: [], skipped: 0, errors: ["The CSV appears empty. Please include a header row and at least one data row."] };
-  }
-
-  const headers = lines[0].split(",").map((header) => header.trim());
-  const missingHeaders = REQUIRED_HEADERS.filter((requiredHeader) => !headers.includes(requiredHeader));
-  if (missingHeaders.length > 0) {
-    return { rows: [], skipped: lines.length - 1, errors: [`Missing required columns: ${missingHeaders.join(", ")}. Please use the example CSV template.`] };
-  }
-
-  const rows: ParsedRow[] = [];
-  const errors: string[] = [];
-  let skipped = 0;
-
-  for (let index = 1; index < lines.length; index += 1) {
-    const rawRowNumber = index + 1;
-    const values = lines[index].split(",").map((value) => value.trim());
-    const row: Partial<ParsedRow> = { rowNumber: rawRowNumber };
-
-    headers.forEach((header, headerIndex) => {
-      const key = HEADER_INDEX[header];
-      if (!key) return;
-      const value = values[headerIndex] ?? "";
-      (row as Record<string, unknown>)[key] = key === "bentsPrice" || key === "cost" ? (value ? Number(value) : undefined) : value;
-    });
-
-    const missingFields: string[] = [];
-    if (!row.sku) missingFields.push("SKU");
-    if (!row.productName) missingFields.push("product_name");
-    if (!Number.isFinite(row.bentsPrice)) missingFields.push("Bents_price");
-    if (!row.bentsUrl) missingFields.push("Bents_URL");
-    if (!row.competitorName) missingFields.push("competitor_name");
-    if (!row.competitorUrl) missingFields.push("competitor_URL");
-    if (missingFields.length > 0) {
-      skipped += 1;
-      errors.push(`Row ${rawRowNumber} was skipped because it's missing: ${missingFields.join(", ")}.`);
-      continue;
-    }
-
-    rows.push(row as ParsedRow);
-  }
-
-  return { rows, skipped, errors };
-}
 
 function pickMappedValue(raw: string | undefined, map: Map<string, string>) {
   if (!raw?.trim()) return { mapped: undefined, matched: true };
@@ -120,7 +46,8 @@ export async function POST(request: NextRequest) {
       const warnings: string[] = [];
 
       if (!looksLikeValidUrl(row.bentsUrl)) errors.push("Missing or invalid Bents_URL (blocking).");
-      if (!looksLikeValidUrl(row.competitorUrl)) errors.push("Missing or invalid competitor_URL (blocking).");
+      const hasCompetitorDetails = Boolean(row.competitorName?.trim() || row.competitorUrl?.trim());
+      if (hasCompetitorDetails && !looksLikeValidUrl(row.competitorUrl ?? "")) errors.push("Invalid competitor_URL (blocking when competitor details are provided).");
 
       const buyerResult = pickMappedValue(row.buyer, buyerMap);
       if (row.buyer && !buyerResult.matched) {
@@ -134,9 +61,12 @@ export async function POST(request: NextRequest) {
         unmatchedDepartments.add(row.department.trim());
       }
 
-      const competitorDomain = canonicalizeDomain(row.competitorUrl);
-      let competitorName = competitorDomainMap.get(competitorDomain);
-      if (!competitorName) {
+      let competitorName: string | undefined;
+      if (row.competitorUrl?.trim()) {
+        const competitorDomain = canonicalizeDomain(row.competitorUrl);
+        competitorName = competitorDomainMap.get(competitorDomain);
+      }
+      if (!competitorName && row.competitorName?.trim()) {
         const byName = pickMappedValue(row.competitorName, competitorNameMap);
         competitorName = byName.mapped ?? row.competitorName.trim();
         if (!byName.matched) {
@@ -152,7 +82,7 @@ export async function POST(request: NextRequest) {
         ...row,
         buyer: buyerResult.mapped,
         department: departmentResult.mapped,
-        competitorName: competitorName ?? row.competitorName.trim(),
+        competitorName,
         hasError: errors.length > 0,
         hasWarning: warnings.length > 0
       };
@@ -168,9 +98,9 @@ export async function POST(request: NextRequest) {
       previewRows: [...rowErrors, ...rowWarnings].slice(0, 5),
       monitorableRows: prepared.filter((row) => !row.hasError).length,
       monitorabilityBreakdown: {
-        fullyMonitorable: prepared.filter((row) => !row.hasError && looksLikeValidUrl(row.bentsUrl) && looksLikeValidUrl(row.competitorUrl)).length,
+        fullyMonitorable: prepared.filter((row) => !row.hasError && looksLikeValidUrl(row.bentsUrl) && looksLikeValidUrl(row.competitorUrl ?? "")).length,
         missingBentsUrl: prepared.filter((row) => !looksLikeValidUrl(row.bentsUrl)).length,
-        missingCompetitorUrl: prepared.filter((row) => !looksLikeValidUrl(row.competitorUrl)).length
+        missingCompetitorUrl: prepared.filter((row) => !row.competitorUrl?.trim()).length
       }
     };
 
@@ -200,13 +130,15 @@ export async function POST(request: NextRequest) {
         });
 
         const productId = upserted[0].id;
-        await upsertCompetitorPrice({
-          product_id: productId,
-          competitor_name: row.competitorName,
-          competitor_url: row.competitorUrl,
-          pricing_status: "Needs review"
-        });
-        await insertPriceHistory({ product_id: productId, competitor_name: row.competitorName });
+        if (row.competitorUrl?.trim() && row.competitorName?.trim()) {
+          await upsertCompetitorPrice({
+            product_id: productId,
+            competitor_name: row.competitorName,
+            competitor_url: row.competitorUrl,
+            pricing_status: "Needs review"
+          });
+          await insertPriceHistory({ product_id: productId, competitor_name: row.competitorName });
+        }
         imported += 1;
       } catch (error) {
         failed += 1;
