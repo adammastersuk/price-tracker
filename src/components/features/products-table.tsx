@@ -95,6 +95,7 @@ const stockOptions: CompetitorStockStatus[] = [
   "Out of Stock",
   "URL Unavailable",
   "Unknown",
+  "Not tracked",
 ];
 
 const buyerSignalTone = {
@@ -293,6 +294,7 @@ const competitorCardPriceLabel = (listing: CompetitorListing) => {
     const msg = listing.checkErrorMessage?.trim();
     if (msg) return msg;
   }
+  if (listing.competitorStockStatus === "Not tracked") return "Not tracked";
   return "No price";
 };
 
@@ -326,6 +328,10 @@ const competitorSummary = (row: TrackedProductRow) => {
     };
   }
 
+  if (!row.competitorListings.length)
+    return { primary: "Not tracked", secondary: "", extra: "" };
+  if (row.competitorListings.every((c) => c.competitorStockStatus === "Not tracked"))
+    return { primary: "Not tracked", secondary: "", extra: "" };
   if (row.competitorListings.some((c) => c.lastCheckStatus === "pending"))
     return { primary: "Pending check", secondary: "", extra: "" };
   if (row.competitorListings.some((c) => c.lastCheckStatus === "failed"))

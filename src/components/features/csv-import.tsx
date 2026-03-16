@@ -3,14 +3,14 @@
 import { useMemo, useRef, useState } from "react";
 import { Button, Card, CardContent } from "@/components/ui/primitives";
 
-const REQUIRED_HEADERS = ["SKU", "product_name", "Bents_price", "Bents_URL", "competitor_name", "competitor_URL"];
-const OPTIONAL_HEADERS = ["buyer", "supplier", "department", "cost"];
+const REQUIRED_HEADERS = ["SKU", "product_name", "Bents_price", "Bents_URL"];
+const OPTIONAL_HEADERS = ["competitor_name", "competitor_URL", "buyer", "supplier", "department", "cost"];
 const EXPECTED_HEADERS = [...REQUIRED_HEADERS, ...OPTIONAL_HEADERS];
 
 const EXAMPLE_CSV = [
   EXPECTED_HEADERS.join(","),
-  "BEN-1001,Bents 1L Whole Milk,1.45,https://www.bents.co.uk/products/ben-1001,Tesco,https://www.tesco.com/groceries/en-GB/products/299123456,Jane Carter,Dairy Partners,Chilled,0.95",
-  "BEN-2042,Bents Sourdough Loaf,2.1,https://www.bents.co.uk/products/ben-2042,Sainsbury's,https://www.sainsburys.co.uk/gol-ui/product/sourdough-loaf-800g,Tom Singh,Bakers United,Bakery,1.25",
+  "BEN-1001,Bents 1L Whole Milk,1.45,https://www.bents.co.uk/products/ben-1001,,,,Jane Carter,Dairy Partners,Chilled,0.95",
+  "BEN-2042,Bents Sourdough Loaf,2.1,https://www.bents.co.uk/products/ben-2042,Tesco,https://www.tesco.com/groceries/en-GB/products/299123456,Tom Singh,Bakers United,Bakery,1.25",
   "BEN-3308,Bents Colombian Ground Coffee 227g,4.75,https://www.bents.co.uk/products/ben-3308,Asda,https://groceries.asda.com/product/coffee/colombian-ground-coffee/1000382219910,Sarah Moss,Casa Roasters,Hot Drinks,3.1"
 ].join("\n");
 
@@ -129,7 +129,7 @@ export function CsvImport({ onImported }: { onImported: () => Promise<void> }) {
       <CardContent className="space-y-4">
         <div>
           <h3 className="font-semibold">CSV Import</h3>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Validate first, then confirm import. Missing SKU/name/price/URLs are blocking errors. Unmatched buyer/department/competitor are warnings.</p>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Validate first, then confirm import. SKU, product_name, Bents_price and Bents_URL are required. competitor_name and competitor_URL are optional.</p>
           <p className="text-sm text-slate-600 dark:text-slate-300">Unmatched values are not auto-created in Settings.</p>
         </div>
 
