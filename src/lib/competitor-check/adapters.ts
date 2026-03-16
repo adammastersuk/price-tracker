@@ -286,6 +286,197 @@ function stripTags(value: string): string {
   return decodeHtmlEntities(value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function extractVisibleHtml(html: string): string {
+  const withoutNonVisualBlocks = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ");
+
+  return withoutNonVisualBlocks.replace(
+    /<([a-z0-9-]+)([^>]*)\b(?:hidden|aria-hidden\s*=\s*["']true["']|style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["']|class\s*=\s*["'][^"']*(?:hidden|visually-hidden|sr-only)[^"']*["'])[^>]*>[\s\S]*?<\/\1>/gi,
+    " "
+  );
+}
+
+function extractYorkshireCartControls(html: string): Array<{ control: string; disabled: boolean }> {
+  const controls: Array<{ control: string; disabled: boolean }> = [];
+
+  const buttonRe = /<button\b[^>]*>[\s\S]*?<\/button>/gi;
+  const inputRe = /<input\b[^>]*>/gi;
+  const anchorRe = /<a\b[^>]*>[\s\S]*?<\/a>/gi;
+
+  const collectControl = (controlHtml: string, textSource = controlHtml) => {
+    const controlText = normalizeWhitespace(stripTags(textSource)).toLowerCase();
+    const matchesAddToCart = /\b(add\s+to\s+cart|add\s+to\s+basket|buy\s+now)\b/i.test(controlText);
+    if (!matchesAddToCart) return;
+
+    const disabled =
+      /\bdisabled\b/i.test(controlHtml) ||
+      /aria-disabled\s*=\s*["']?true["']?/i.test(controlHtml) ||
+      /\b(?:is-|btn-)?disabled\b|\bunavailable\b|\bsold\s*out\b|\bout\s+of\s+stock\b/i.test(controlHtml) ||
+      /\b(?:sold\s*out|out\s+of\s+stock|unavailable)\b/i.test(controlText);
+
+    controls.push({ control: controlText, disabled });
+  };
+
+  for (const buttonMatch of html.matchAll(buttonRe)) {
+    collectControl(buttonMatch[0]);
+  }
+
+  for (const inputMatch of html.matchAll(inputRe)) {
+    const tag = inputMatch[0];
+    const valueMatch = tag.match(/\bvalue\s*=\s*["']([^"']+)["']/i);
+    collectControl(tag, valueMatch?.[1] ?? tag);
+  }
+
+  for (const anchorMatch of html.matchAll(anchorRe)) {
+    collectControl(anchorMatch[0]);
+  }
+
+  return controls;
+}
+
+function detectYorkshireStockStatus(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
+  diagnostics: {
+    hasLowStockSelector: boolean;
+    hasLowStockText: boolean;
+    hasInStockText: boolean;
+    hasExplicitOutOfStockText: boolean;
+    hasExplicitUnavailableText: boolean;
+    hasUnavailableFormState: boolean;
+    hasEnabledAddToCart: boolean;
+    hasDisabledAddToCart: boolean;
+    matchedAddToCartControls: number;
+  };
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const cartControls = extractYorkshireCartControls(visibleHtml);
+
+  const hasEnabledAddToCart = cartControls.some((control) => !control.disabled);
+  const hasDisabledAddToCart = cartControls.some((control) => control.disabled);
+
+  const hasLowStockSelector =
+    /class\s*=\s*["'][^"']*\bproduct_inventory-low-stock-text\b[^"']*["']/i.test(visibleHtml) &&
+    /\blow\s+stock\b/i.test(visibleText);
+  const hasLowStockText = /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/i.test(visibleText);
+  const hasInStockText = /\bin\s+stock\b|\bin\s+stock\s+for\s+home\s+delivery\b/i.test(visibleText);
+  const hasExplicitOutOfStockText = /\bout\s+of\s+stock\b|\bsold\s+out\b/i.test(visibleText);
+  const hasExplicitUnavailableText = /\bunavailable\b/.test(visibleText);
+  const hasUnavailableFormState =
+    /<form\b[^>]*\b(?:unavailable|sold-?out|disabled)\b[^>]*>/i.test(visibleHtml) ||
+    /<form\b[^>]*\bdata-available\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml);
+
+  const hasPositivePurchasableSignal = hasEnabledAddToCart || hasLowStockSelector || hasLowStockText || hasInStockText;
+  const hasClearUnavailableState = (hasDisabledAddToCart || hasUnavailableFormState) && !hasEnabledAddToCart;
+
+  if ((hasExplicitOutOfStockText || hasExplicitUnavailableText) && hasClearUnavailableState) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasLowStockSelector,
+        hasLowStockText,
+        hasInStockText,
+        hasExplicitOutOfStockText,
+        hasExplicitUnavailableText,
+        hasUnavailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasLowStockSelector || hasLowStockText) {
+    return {
+      stock: "Low Stock",
+      diagnostics: {
+        hasLowStockSelector,
+        hasLowStockText,
+        hasInStockText,
+        hasExplicitOutOfStockText,
+        hasExplicitUnavailableText,
+        hasUnavailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasInStockText) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasLowStockSelector,
+        hasLowStockText,
+        hasInStockText,
+        hasExplicitOutOfStockText,
+        hasExplicitUnavailableText,
+        hasUnavailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasEnabledAddToCart) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasLowStockSelector,
+        hasLowStockText,
+        hasInStockText,
+        hasExplicitOutOfStockText,
+        hasExplicitUnavailableText,
+        hasUnavailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  if (!hasPositivePurchasableSignal && (hasExplicitOutOfStockText || hasExplicitUnavailableText || hasClearUnavailableState)) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasLowStockSelector,
+        hasLowStockText,
+        hasInStockText,
+        hasExplicitOutOfStockText,
+        hasExplicitUnavailableText,
+        hasUnavailableFormState,
+        hasEnabledAddToCart,
+        hasDisabledAddToCart,
+        matchedAddToCartControls: cartControls.length
+      }
+    };
+  }
+
+  return {
+    stock: "Unknown",
+    diagnostics: {
+      hasLowStockSelector,
+      hasLowStockText,
+      hasInStockText,
+      hasExplicitOutOfStockText,
+      hasExplicitUnavailableText,
+      hasUnavailableFormState,
+      hasEnabledAddToCart,
+      hasDisabledAddToCart,
+      matchedAddToCartControls: cartControls.length
+    }
+  };
+}
+
 function parseWooCommerceAmount(value: string): number | null {
   const normalized = decodeHtmlEntities(value)
     .replace(/\u00a0/g, " ")
@@ -1597,14 +1788,7 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
     const compareAtPrice = compareAtText ? parseGbpCurrency(compareAtText) : null;
     const wasPrice = compareAtPrice && compareAtPrice > accepted.parsed ? compareAtPrice : null;
 
-    const pageText = stripTags(html);
-    const stock = /\bout\s+of\s+stock\b|\bsold\s+out\b|\bunavailable\b/i.test(pageText)
-      ? "Out of Stock"
-      : /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/i.test(pageText)
-        ? "Low Stock"
-        : /\bin\s+stock\b/i.test(pageText)
-          ? "In Stock"
-          : "Unknown";
+    const { stock, diagnostics: stockDiagnostics } = detectYorkshireStockStatus(html);
 
     return {
       competitor_current_price: accepted.parsed,
@@ -1628,7 +1812,8 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
         accepted_value: accepted.parsed,
         rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
         rejection_reasons: [],
-        compare_at_candidate: compareAtText ? { extracted_text: compareAtText, parsed: compareAtPrice } : null
+        compare_at_candidate: compareAtText ? { extracted_text: compareAtText, parsed: compareAtPrice } : null,
+        stock_diagnostics: stockDiagnostics
       }
     };
   }
