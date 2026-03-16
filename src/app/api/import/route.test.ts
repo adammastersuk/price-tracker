@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseCsv } from "./route";
+import { parseCsv } from "./parse";
 
 test("import parse: Bents-only row succeeds when competitor fields are blank", () => {
   const csv = [
