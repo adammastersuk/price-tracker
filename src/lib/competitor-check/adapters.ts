@@ -475,6 +475,7 @@ function normalizeWhitespace(value: string): string {
 
 function extractVisibleHtml(html: string): string {
   const withoutNonVisualBlocks = html
+    .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, " ")
@@ -484,6 +485,221 @@ function extractVisibleHtml(html: string): string {
     /<([a-z0-9-]+)([^>]*)\b(?:hidden|aria-hidden\s*=\s*["']true["']|style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["']|class\s*=\s*["'][^"']*(?:hidden|visually-hidden|sr-only)[^"']*["'])[^>]*>[\s\S]*?<\/\1>/gi,
     " "
   );
+}
+
+function extractSquiresCartControls(html: string): Array<{ control: string; disabled: boolean }> {
+  const controls: Array<{ control: string; disabled: boolean }> = [];
+  const patterns = [/<button\b[^>]*>[\s\S]*?<\/button>/gi, /<input\b[^>]*>/gi, /<a\b[^>]*>[\s\S]*?<\/a>/gi];
+
+  const collectControl = (controlHtml: string, textSource = controlHtml) => {
+    const controlText = normalizeWhitespace(stripTags(textSource)).toLowerCase();
+    if (!/\b(add\s+to\s+basket|add\s+to\s+cart|buy\s+now)\b/i.test(controlText)) return;
+
+    const disabled =
+      /\bdisabled\b/i.test(controlHtml) ||
+      /aria-disabled\s*=\s*["']?true["']?/i.test(controlHtml) ||
+      /\b(?:is-|btn-)?disabled\b/i.test(controlHtml) ||
+      /\b(?:sold\s*out|out\s+of\s+stock|unavailable)\b/i.test(controlText);
+
+    controls.push({ control: controlText, disabled });
+  };
+
+  for (const pattern of patterns) {
+    for (const match of html.matchAll(pattern)) {
+      const tag = match[0];
+      if (tag.startsWith("<input")) {
+        const valueMatch = tag.match(/\bvalue\s*=\s*["']([^"']+)["']/i);
+        collectControl(tag, valueMatch?.[1] ?? tag);
+      } else {
+        collectControl(tag);
+      }
+    }
+  }
+
+  return controls;
+}
+
+function detectSquiresStockStatus(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
+  diagnostics: {
+    hasVisibleInStockText: boolean;
+    hasVisibleLowStockText: boolean;
+    hasVisibleOutOfStockText: boolean;
+    hasVisibleUnavailableText: boolean;
+    hasAvailabilityInStockClass: boolean;
+    hasAvailabilityOutOfStockClass: boolean;
+    hasEnabledAddToBasket: boolean;
+    hasDisabledAddToBasket: boolean;
+    hasVisibleQuantityInput: boolean;
+    hasActiveBasketForm: boolean;
+    hasUnavailablePurchaseState: boolean;
+    stockContainerText: string;
+    matchedAddToBasketControls: number;
+  };
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const cartControls = extractSquiresCartControls(visibleHtml);
+
+  const stockContainerMatches = [
+    ...visibleHtml.matchAll(/<[^>]*class=["'][^"']*\b(?:availability|stock|inventory|product-stock|stock-label)\b[^"']*["'][^>]*>([\s\S]*?)<\//gi)
+  ];
+  const stockContainerText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[1] ?? "")).join(" ")).toLowerCase();
+
+  const normalizedStockText = normalizeWhitespace(`${stockContainerText} ${visibleText}`.trim());
+  const hasVisibleInStockText = /\bin\s+stock\b/.test(normalizedStockText);
+  const hasVisibleLowStockText = /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(normalizedStockText);
+  const hasVisibleOutOfStockText = /\bout\s+of\s+stock\b|\bsold\s+out\b/.test(normalizedStockText);
+  const hasVisibleUnavailableText = /\bunavailable\b/.test(normalizedStockText);
+
+  const hasAvailabilityInStockClass = /class\s*=\s*["'][^"']*\bavailability\b[^"']*\bin-stock\b[^"']*["']/i.test(visibleHtml);
+  const hasAvailabilityOutOfStockClass =
+    /class\s*=\s*["'][^"']*\bavailability\b[^"']*\b(?:out-of-stock|unavailable|sold-out)\b[^"']*["']/i.test(visibleHtml);
+
+  const hasEnabledAddToBasket = cartControls.some((control) => !control.disabled);
+  const hasDisabledAddToBasket = cartControls.some((control) => control.disabled);
+
+  const hasVisibleQuantityInput =
+    /<(?:input|select)\b[^>]*(?:name\s*=\s*["']qty|name\s*=\s*["']quantity|id\s*=\s*["'][^"']*(?:qty|quantity)|class\s*=\s*["'][^"']*(?:qty|quantity)[^"']*)[^>]*>/i.test(visibleHtml) &&
+    !/<(?:input|select)\b[^>]*(?:name\s*=\s*["']qty|name\s*=\s*["']quantity|id\s*=\s*["'][^"']*(?:qty|quantity)|class\s*=\s*["'][^"']*(?:qty|quantity)[^"']*)[^>]*\bdisabled\b/i.test(visibleHtml);
+
+  const hasActiveBasketForm =
+    /<form\b[^>]*>(?=[\s\S]{0,2200}(?:add\s*to\s*(?:basket|cart)|buy\s*now))[\s\S]*?<\/form>/i.test(visibleHtml) &&
+    !/<form\b[^>]*\b(?:data-available|data-product-in-stock)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml) &&
+    !/<form\b[^>]*\b(?:unavailable|sold-?out)\b[^>]*>/i.test(visibleHtml);
+
+  const hasUnavailablePurchaseState =
+    hasAvailabilityOutOfStockClass ||
+    /<[^>]*class=["'][^"']*\b(?:out-of-stock|sold-out|unavailable|not-available)\b[^"']*["'][^>]*>/i.test(visibleHtml) ||
+    /<form\b[^>]*\b(?:data-available|data-product-in-stock)\s*=\s*["']?false["']?[^>]*>/i.test(visibleHtml);
+
+  const hasPositivePurchasableSignal =
+    hasAvailabilityInStockClass || hasVisibleInStockText || hasVisibleLowStockText || hasEnabledAddToBasket || (hasVisibleQuantityInput && hasActiveBasketForm);
+  const hasClearUnavailableSignal = hasVisibleOutOfStockText || hasVisibleUnavailableText || hasUnavailablePurchaseState || hasDisabledAddToBasket;
+
+  if (hasClearUnavailableSignal && !hasPositivePurchasableSignal && (hasDisabledAddToBasket || hasUnavailablePurchaseState || hasAvailabilityOutOfStockClass)) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasVisibleUnavailableText,
+        hasAvailabilityInStockClass,
+        hasAvailabilityOutOfStockClass,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActiveBasketForm,
+        hasUnavailablePurchaseState,
+        stockContainerText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasVisibleLowStockText) {
+    return {
+      stock: "Low Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasVisibleUnavailableText,
+        hasAvailabilityInStockClass,
+        hasAvailabilityOutOfStockClass,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActiveBasketForm,
+        hasUnavailablePurchaseState,
+        stockContainerText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasAvailabilityInStockClass || hasVisibleInStockText) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasVisibleUnavailableText,
+        hasAvailabilityInStockClass,
+        hasAvailabilityOutOfStockClass,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActiveBasketForm,
+        hasUnavailablePurchaseState,
+        stockContainerText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasEnabledAddToBasket || (hasVisibleQuantityInput && hasActiveBasketForm)) {
+    return {
+      stock: "In Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasVisibleUnavailableText,
+        hasAvailabilityInStockClass,
+        hasAvailabilityOutOfStockClass,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActiveBasketForm,
+        hasUnavailablePurchaseState,
+        stockContainerText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  if (hasClearUnavailableSignal) {
+    return {
+      stock: "Out of Stock",
+      diagnostics: {
+        hasVisibleInStockText,
+        hasVisibleLowStockText,
+        hasVisibleOutOfStockText,
+        hasVisibleUnavailableText,
+        hasAvailabilityInStockClass,
+        hasAvailabilityOutOfStockClass,
+        hasEnabledAddToBasket,
+        hasDisabledAddToBasket,
+        hasVisibleQuantityInput,
+        hasActiveBasketForm,
+        hasUnavailablePurchaseState,
+        stockContainerText,
+        matchedAddToBasketControls: cartControls.length
+      }
+    };
+  }
+
+  return {
+    stock: "Unknown",
+    diagnostics: {
+      hasVisibleInStockText,
+      hasVisibleLowStockText,
+      hasVisibleOutOfStockText,
+      hasVisibleUnavailableText,
+      hasAvailabilityInStockClass,
+      hasAvailabilityOutOfStockClass,
+      hasEnabledAddToBasket,
+      hasDisabledAddToBasket,
+      hasVisibleQuantityInput,
+      hasActiveBasketForm,
+      hasUnavailablePurchaseState,
+      stockContainerText,
+      matchedAddToBasketControls: cartControls.length
+    }
+  };
 }
 
 function extractYorkshireCartControls(html: string): Array<{ control: string; disabled: boolean }> {
@@ -1027,6 +1243,7 @@ class WhitehallAdapter implements CompetitorAdapter {
       competitor_promo_price: null,
       competitor_was_price: wasPrice,
       competitor_stock_status: stock,
+      result_status: stock === "Out of Stock" ? "out_of_stock" : "ok",
       match_confidence: "High",
       raw_price_text: saleText,
       extraction_source: "whitehall_selector_adapter",
@@ -1305,6 +1522,7 @@ class GardenFurnitureWorldAdapter implements CompetitorAdapter {
       competitor_promo_price: was && nowExtraction.value < was ? nowExtraction.value : null,
       competitor_was_price: was,
       competitor_stock_status: stock,
+      result_status: stock === "Out of Stock" ? "out_of_stock" : "ok",
       match_confidence: "High",
       raw_price_text: nowExtraction.extractedText ?? undefined,
       extraction_source: "garden_furniture_world",
@@ -2015,19 +2233,15 @@ class SquiresAdapter implements CompetitorAdapter {
     const wasText = wasMatch?.[1] ? stripTags(wasMatch[1]) : "";
     const wasPrice = wasText ? parseGbpCurrency(wasText) : null;
 
-    const stock = /\bout\s+of\s+stock\b|\bsold\s+out\b|\bunavailable\b/i.test(html)
-      ? "Out of Stock"
-      : /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/i.test(html)
-        ? "Low Stock"
-        : /\bin\s+stock\b|\bavailable\b/i.test(html)
-          ? "In Stock"
-          : "Unknown";
+    const squiresStockDetection = detectSquiresStockStatus(html);
+    const stock = squiresStockDetection.stock;
 
     return {
       competitor_current_price: accepted.parsed,
       competitor_promo_price: null,
       competitor_was_price: wasPrice,
       competitor_stock_status: stock,
+      result_status: stock === "Out of Stock" ? "out_of_stock" : "ok",
       match_confidence: "High",
       raw_price_text: accepted.extracted_text,
       extraction_source: "squires_selector_adapter",
@@ -2042,6 +2256,7 @@ class SquiresAdapter implements CompetitorAdapter {
         selectors_found: selectorsFound,
         candidate_values_found: candidateValues,
         accepted_value: accepted.parsed,
+        stock_diagnostics: squiresStockDetection.diagnostics,
         rejected_values: candidateValues.filter((candidate) => candidate !== accepted),
         rejection_reasons: []
       }
