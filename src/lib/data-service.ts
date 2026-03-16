@@ -1,3 +1,4 @@
+import { isInStockForComparison } from "@/lib/competitor-check/classification";
 import { CompetitorListing, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 
 export interface ProductFilters {
@@ -95,11 +96,7 @@ export function uniqueValues(rows: TrackedProductRow[]) {
 }
 
 function isTrustworthyListing(listing: CompetitorListing): boolean {
-  return listing.lastCheckStatus === "success"
-    && listing.suspiciousChangeFlag !== true
-    && listing.extractionMetadata?.trust_rejected !== true
-    && listing.competitorCurrentPrice !== null
-    && listing.competitorCurrentPrice > 0;
+  return isInStockForComparison(listing);
 }
 
 function lowestTrustedCompetitor(row: TrackedProductRow): TrustedCompetitor | null {

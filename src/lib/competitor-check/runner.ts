@@ -13,6 +13,7 @@ import {
   insertProductSourceHistory
 } from "@/lib/db";
 import { AdapterExtractionError, selectAdapter } from "@/lib/competitor-check/adapters";
+import { classifyAdapterOutcome } from "@/lib/competitor-check/classification";
 import {
   completeRefreshRun,
   createRefreshRun,
@@ -363,7 +364,40 @@ async function checkCompetitorSource(
       brand: target.brand
     });
 
-    const resultStatus = fetched.result_status ?? (fetched.competitor_stock_status === "Out of Stock" ? "out_of_stock" : "ok");
+    const classification = classifyAdapterOutcome(fetched);
+    const resultStatus = classification.internalResultStatus;
+    const normalizedStockStatus = classification.competitorStockStatus;
+
+    if (classification.runStatus === "failed") {
+      const reason = typeof fetched.metadata?.result_message === "string"
+        ? fetched.metadata.result_message
+        : "Adapter reported extraction failure";
+      const diagnostics = {
+        ...(fetched.metadata ?? {}),
+        result_status: resultStatus,
+        run_status: classification.runStatus,
+        availability_status: classification.availabilityStatus
+      };
+      await saveFailure(target, mapping.mappingId, mapping.competitorName, mapping.competitorUrl, reason, diagnostics);
+      return {
+        result: {
+          sourceType: "competitor",
+          sourceName: mapping.competitorName,
+          url: mapping.competitorUrl,
+          currentPrice: mapping.previousValidPrice,
+          previousPrice: mapping.previousValidPrice,
+          stockStatus: "Unknown",
+          success: false,
+          status: "failed",
+          checkedAt,
+          notes: reason,
+          metadata: diagnostics
+        },
+        failure: { productId: target.productId, sku: target.sku, competitorUrl: mapping.competitorUrl, reason },
+        succeeded: false
+      };
+    }
+
     const reasons = resultStatus === "ok"
       ? suspiciousReason(
           {
@@ -389,14 +423,14 @@ async function checkCompetitorSource(
     const pricingStatus = derivePricingStatus({
       competitorCurrentPrice: acceptedCurrentPrice,
       competitorPromoPrice: fetched.competitor_promo_price,
-      competitorStockStatus: fetched.competitor_stock_status as "In Stock" | "Low Stock" | "Out of Stock" | "Unknown",
+      competitorStockStatus: normalizedStockStatus as "In Stock" | "Low Stock" | "Out of Stock" | "URL Unavailable" | "Unknown",
       priceDifferencePercent: diffPct
     }, runtime.toleranceSettings.inLinePricingTolerancePercent);
 
     const removedMessage = resultStatus === "removed"
       ? typeof fetched.metadata?.result_message === "string"
         ? fetched.metadata.result_message
-        : "Product no longer available at retailer. Last known values may be stale"
+        : "URL unavailable: tracked product URL no longer resolves to a valid product page"
       : "";
     const outOfStockMessage = resultStatus === "out_of_stock" && fetched.competitor_current_price === null
       ? "Product appears out of stock at retailer"
@@ -409,7 +443,7 @@ async function checkCompetitorSource(
       competitor_current_price: acceptedCurrentPrice ?? undefined,
       competitor_promo_price: fetched.competitor_promo_price ?? undefined,
       competitor_was_price: (suspicious ? mapping.previousValidPrice : fetched.competitor_was_price) ?? undefined,
-      competitor_stock_status: fetched.competitor_stock_status,
+      competitor_stock_status: normalizedStockStatus,
       last_checked_at: checkedAt,
       price_difference_gbp: diff ?? undefined,
       price_difference_percent: diffPct ?? undefined,
@@ -424,6 +458,8 @@ async function checkCompetitorSource(
       extraction_metadata: {
         ...(fetched.metadata ?? {}),
         result_status: resultStatus,
+        run_status: classification.runStatus,
+        availability_status: classification.availabilityStatus,
         trust_rejected: suspicious,
         accepted_current_price: acceptedCurrentPrice,
         extracted_current_price: fetched.competitor_current_price,
@@ -458,6 +494,8 @@ async function checkCompetitorSource(
         extraction_metadata: {
           ...(fetched.metadata ?? {}),
           result_status: resultStatus,
+          run_status: classification.runStatus,
+          availability_status: classification.availabilityStatus,
           trust_rejected: suspicious,
           trust_warnings: reasons
         }
@@ -483,7 +521,7 @@ async function checkCompetitorSource(
         url: mapping.competitorUrl,
         currentPrice: acceptedCurrentPrice,
         previousPrice: mapping.previousPrice,
-        stockStatus: (fetched.competitor_stock_status as SourceCheckResult["stockStatus"]) ?? "Unknown",
+        stockStatus: normalizedStockStatus,
         success: true,
         status: suspicious ? "suspicious" : "success",
         checkedAt,

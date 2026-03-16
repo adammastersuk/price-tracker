@@ -39,6 +39,7 @@ test("Webbs: redirect from product URL to category is classified as removed", as
   const result = await adapter.fetchPriceSignal(baseInput);
 
   assert.equal(result.result_status, "removed");
+  assert.equal(result.competitor_stock_status, "URL Unavailable");
   assert.equal(result.extraction_source, "webbs_removed_product");
 });
 
@@ -53,6 +54,7 @@ test("Webbs: 404/410 is classified as removed", async () => {
   const result = await adapter.fetchPriceSignal(baseInput);
 
   assert.equal(result.result_status, "removed");
+  assert.equal(result.competitor_stock_status, "URL Unavailable");
 });
 
 test("Webbs: harmless redirect to same product URL still scrapes", async () => {
