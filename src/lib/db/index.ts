@@ -1,3 +1,4 @@
+import { isInStockForComparison } from "@/lib/competitor-check/classification";
 import { CheckStatus, CompetitorListing, MonitorabilityCategory, PricingStatus, TrackedProductRow, WorkflowStatus } from "@/types/pricing";
 import { supabaseRequest } from "@/lib/db/client";
 import { toNullablePlainObject, toPlainObject } from "@/lib/json";
@@ -211,10 +212,7 @@ const defaultRuntimeSettings: RuntimeSettings = {
 const productSelect = "*,competitor_prices(*),product_notes(*),price_history(*)";
 
 function isTrustworthyListing(comp: CompetitorListing): boolean {
-  if (comp.lastCheckStatus !== "success") return false;
-  if (comp.competitorCurrentPrice === null || !Number.isFinite(comp.competitorCurrentPrice) || comp.competitorCurrentPrice <= 0) return false;
-  if ((comp.extractionMetadata?.trust_rejected as boolean | undefined) === true) return false;
-  return true;
+  return isInStockForComparison(comp);
 }
 
 

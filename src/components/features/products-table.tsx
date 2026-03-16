@@ -27,6 +27,7 @@ import {
   TrackedProductRow,
 } from "@/types/pricing";
 import { safeReadJsonResponse } from "@/lib/json";
+import { isInStockForComparison, listingSortWeight } from "@/lib/competitor-check/classification";
 
 interface RefreshSummary {
   succeeded: number;
@@ -92,6 +93,7 @@ const stockOptions: CompetitorStockStatus[] = [
   "In Stock",
   "Low Stock",
   "Out of Stock",
+  "URL Unavailable",
   "Unknown",
 ];
 
@@ -303,23 +305,16 @@ const sortCompetitorListings = (listings: CompetitorListing[]) =>
   listings
     .map((listing, index) => ({ listing, index }))
     .sort((a, b) => {
-      const priceDiff =
-        listingPriceRank(a.listing) - listingPriceRank(b.listing);
+      const statusWeightDiff = listingSortWeight(a.listing) - listingSortWeight(b.listing);
+      if (statusWeightDiff !== 0) return statusWeightDiff;
+      const priceDiff = listingPriceRank(a.listing) - listingPriceRank(b.listing);
       if (priceDiff !== 0) return priceDiff;
       return a.index - b.index;
     })
     .map(({ listing }) => listing);
 
 const lowestTrustedListing = (row: TrackedProductRow) =>
-  sortCompetitorListings(
-    row.competitorListings.filter(
-      (c) =>
-        c.competitorCurrentPrice !== null &&
-        c.competitorCurrentPrice > 0 &&
-        c.lastCheckStatus === "success" &&
-        c.extractionMetadata?.trust_rejected !== true,
-    ),
-  )[0];
+  sortCompetitorListings(row.competitorListings.filter((c) => isInStockForComparison(c)))[0];
 
 const competitorSummary = (row: TrackedProductRow) => {
   const lowest = lowestTrustedListing(row);
@@ -712,19 +707,9 @@ export function ProductsTable({
 
   const lowestTrustedCompetitor = useMemo(() => {
     if (!selected) return null;
-    const valid = competitorForm.filter(
-      (listing) =>
-        listing.lastCheckStatus === "success" &&
-        listing.competitorCurrentPrice !== null &&
-        listing.competitorCurrentPrice > 0 &&
-        listing.extractionMetadata?.trust_rejected !== true,
-    );
+    const valid = competitorForm.filter((listing) => isInStockForComparison(listing));
     if (!valid.length) return null;
-    return [...valid].sort(
-      (a, b) =>
-        (a.competitorCurrentPrice ?? Number.POSITIVE_INFINITY) -
-        (b.competitorCurrentPrice ?? Number.POSITIVE_INFINITY),
-    )[0];
+    return sortCompetitorListings(valid)[0];
   }, [competitorForm, selected]);
 
   const priceSummaryText = useMemo(() => {

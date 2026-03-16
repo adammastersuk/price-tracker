@@ -337,7 +337,7 @@ function buildWebbsRemovedResult(input: { originalUrl: string; finalUrl: string;
     competitor_current_price: null,
     competitor_promo_price: null,
     competitor_was_price: null,
-    competitor_stock_status: "Out of Stock",
+    competitor_stock_status: "URL Unavailable",
     result_status: "removed",
     match_confidence: "High",
     raw_price_text: input.reason,
@@ -349,7 +349,8 @@ function buildWebbsRemovedResult(input: { originalUrl: string; finalUrl: string;
       redirect_chain: input.redirectChain,
       final_http_status: input.httpStatus,
       page_classification: input.pageClassification,
-      result_message: `${input.reason}. Last known values may be stale`
+      internal_result_status: "removed",
+      result_message: `URL unavailable: ${input.reason}`
     }
   };
 }
