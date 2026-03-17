@@ -28,6 +28,7 @@ import {
 } from "@/types/pricing";
 import { safeReadJsonResponse } from "@/lib/json";
 import { isInStockForComparison, listingSortWeight } from "@/lib/competitor-check/classification";
+import { checkedAtPill, shouldShowCompetitorInlineNote } from "@/components/features/products-table-helpers";
 
 interface RefreshSummary {
   succeeded: number;
@@ -104,21 +105,6 @@ const buyerSignalTone = {
   inline: "border border-sky-200 bg-sky-100 text-sky-800",
 } as const;
 
-const checkedAtPill = (checkedAt: string | null) => {
-  if (!checkedAt) return null;
-  const checkedDate = new Date(checkedAt);
-  const isOlderThanDay = Date.now() - checkedDate.getTime() > 24 * 60 * 60 * 1000;
-  const label = isOlderThanDay
-    ? `Checked ${checkedDate.toLocaleDateString([], { day: "2-digit", month: "short" })}, ${checkedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-    : `Checked ${checkedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-
-  return {
-    label,
-    tone: isOlderThanDay
-      ? "border border-rose-200 bg-rose-100 text-rose-700"
-      : "border border-emerald-200 bg-emerald-100 text-emerald-800",
-  };
-};
 
 interface SavedViewState {
   search: string;
@@ -1348,11 +1334,13 @@ export function ProductsTable({
                             Diff vs Bents: {signal.diffLabel}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
-                            <span
-                              className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2.5 py-0.5 leading-none ${buyerSignalTone[signal.key]}`}
-                            >
-                              {signal.label}
-                            </span>
+                            {shouldShowCompetitorInlineNote(signal.label, r.competitorListings) && (
+                              <span
+                                className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2.5 py-0.5 leading-none ${buyerSignalTone[signal.key]}`}
+                              >
+                                {signal.label}
+                              </span>
+                            )}
                             {checkedPill && (
                               <span className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2.5 py-0.5 leading-none ${checkedPill.tone}`}>
                                 {checkedPill.label}
