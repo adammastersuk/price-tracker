@@ -456,6 +456,20 @@ function isBentsHost(raw: string): boolean {
   return /(^|\.)bents\.co\.uk$/i.test(normalizedHost);
 }
 
+function isBritishGardenCentresHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)britishgardencentres\.com$/i.test(normalizedHost);
+}
+
+function isLikelyBlockedResponse(status: number, body: string): boolean {
+  if ([403, 429, 503].includes(status)) return true;
+  return /access\s*denied|forbidden|captcha|cloudflare|bot\s*protection|challenge/i.test(body);
+}
+
+function previewBody(body: string): string {
+  return normalizeWhitespace(stripTags(body)).slice(0, 240);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&pound;/gi, "£")
@@ -2495,6 +2509,303 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
 }
 
 
+type BritishGardenCentresPageClassification = "product" | "non_product" | "blocked" | "removed" | "unknown";
+
+function pathLooksLikeBritishProduct(path: string): boolean {
+  if (!path || path === "/") return false;
+  return !/(\/search|\/category|\/categories|\/collections|\/brands?|\/centres?|\/events?|\/advice|\/careers|\/contact)\b/i.test(path);
+}
+
+function classifyBritishGardenCentresPage(input: { originalUrl: string; finalUrl: string; status: number; html: string; }): {
+  pageClassification: BritishGardenCentresPageClassification;
+  looksLikeProductPage: boolean;
+  removedLikely: boolean;
+  reason: string;
+} {
+  const { originalUrl, finalUrl, status, html } = input;
+  const visibleHtml = extractVisibleHtml(html);
+  const text = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const finalPath = pathFromUrl(finalUrl);
+  const originalPath = pathFromUrl(originalUrl);
+
+  const hasTitle = /<h1\b[^>]*>[^<]{2,}<\/h1>/i.test(visibleHtml);
+  const hasAddToCart = /add\s*to\s*cart/i.test(text) && /<button\b[^>]*>[^<]*add\s*to\s*cart[\s\S]*?<\/button>/i.test(visibleHtml);
+  const hasPrice = /(?:now\s*)?(?:£|&pound;)\s*\d[\d,.]*/i.test(visibleHtml);
+  const hasPurchaseForm = /<form\b[^>]*(?:buyquantity|basket|cart|add)[^>]*>/i.test(visibleHtml);
+  const hasUnavailableText = /product\s+not\s+found|no\s+products\s+found|page\s+not\s+found|404/i.test(text);
+
+  const looksLikeProductPage = (hasTitle && hasPrice) || (hasPrice && (hasAddToCart || hasPurchaseForm));
+
+  if (status === 404 || status == 410 || hasUnavailableText) {
+    return { pageClassification: "removed", looksLikeProductPage: false, removedLikely: true, reason: "Product URL unavailable or removed" };
+  }
+
+  const redirectedToNonProduct = normalizeComparableUrl(originalUrl) !== normalizeComparableUrl(finalUrl)
+    && pathLooksLikeBritishProduct(originalPath)
+    && !pathLooksLikeBritishProduct(finalPath);
+
+  if (redirectedToNonProduct && !looksLikeProductPage) {
+    return { pageClassification: "non_product", looksLikeProductPage: false, removedLikely: true, reason: "Original URL redirected to non-product page" };
+  }
+
+  if (looksLikeProductPage) {
+    return { pageClassification: "product", looksLikeProductPage: true, removedLikely: false, reason: "" };
+  }
+
+  return { pageClassification: "unknown", looksLikeProductPage: false, removedLikely: false, reason: "Could not confidently classify page as product" };
+}
+
+function detectBritishGardenCentresStock(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
+  reason: string;
+  signals: Record<string, unknown>;
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const text = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+
+  const addToCartButtons = [...visibleHtml.matchAll(/<button\b[^>]*>[\s\S]*?add\s*to\s*cart[\s\S]*?<\/button>/gi)].map((m) => m[0]);
+  const hasEnabledAddToCart = addToCartButtons.some((button) => !/\bdisabled\b|aria-disabled\s*=\s*["']?true/i.test(button));
+  const hasDisabledAddToCart = addToCartButtons.some((button) => /\bdisabled\b|aria-disabled\s*=\s*["']?true/i.test(button));
+
+  const hasExplicitOutOfStock = /\bout\s+of\s+stock\b|\bsold\s+out\b|\bunavailable\b|\bnot\s+available\b/.test(text);
+  const hasLowStock = /\blow\s+stock\b|\blimited\s+stock\b|\bonly\s+\d+\s+left\b/.test(text);
+  const hasInStockAvailability = /available\s+for\s+home\s+delivery|\bin\s+stock\b|available\s+for\s+delivery/.test(text);
+
+  if ((hasExplicitOutOfStock || hasDisabledAddToCart) && !hasEnabledAddToCart) {
+    return {
+      stock: "Out of Stock",
+      reason: "Explicit unavailable state detected in visible purchase area",
+      signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+    };
+  }
+
+  if (hasLowStock) {
+    return {
+      stock: "Low Stock",
+      reason: "Low stock indicator present",
+      signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+    };
+  }
+
+  if (hasInStockAvailability) {
+    return {
+      stock: "In Stock",
+      reason: "In-stock/available-for-delivery signal present",
+      signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+    };
+  }
+
+  if (hasEnabledAddToCart) {
+    return {
+      stock: "In Stock",
+      reason: "Enabled add-to-cart fallback",
+      signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+    };
+  }
+
+  if (hasExplicitOutOfStock || hasDisabledAddToCart) {
+    return {
+      stock: "Out of Stock",
+      reason: "No purchasable signals and unavailable text present",
+      signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+    };
+  }
+
+  return {
+    stock: "Unknown",
+    reason: "No reliable stock signals found",
+    signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+  };
+}
+
+class BritishGardenCentresAdapter implements CompetitorAdapter {
+  name = "british-garden-centres";
+
+  supports(url: string) {
+    return isBritishGardenCentresHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    const html = await response.text();
+    const finalUrl = response.url || input.competitorUrl;
+    const redirectChain = normalizeComparableUrl(finalUrl) !== normalizeComparableUrl(input.competitorUrl)
+      ? [input.competitorUrl, finalUrl]
+      : [input.competitorUrl];
+
+    if (isLikelyBlockedResponse(response.status, html)) {
+      return {
+        competitor_current_price: null,
+        competitor_promo_price: null,
+        competitor_was_price: null,
+        competitor_stock_status: "Unknown",
+        result_status: "adapter_error",
+        match_confidence: "Needs review",
+        raw_price_text: `Blocked response (HTTP ${response.status})`,
+        extraction_source: "british_garden_centres_blocked",
+        metadata: {
+          adapter_attempted: this.name,
+          original_url: input.competitorUrl,
+          final_url: finalUrl,
+          redirect_chain: redirectChain,
+          final_http_status: response.status,
+          page_classification: "blocked",
+          body_preview: previewBody(html)
+        }
+      };
+    }
+
+    const classification = classifyBritishGardenCentresPage({
+      originalUrl: input.competitorUrl,
+      finalUrl,
+      status: response.status,
+      html
+    });
+
+    if (classification.removedLikely) {
+      return {
+        competitor_current_price: null,
+        competitor_promo_price: null,
+        competitor_was_price: null,
+        competitor_stock_status: "URL Unavailable",
+        result_status: "removed",
+        match_confidence: "High",
+        raw_price_text: classification.reason,
+        extraction_source: "british_garden_centres_removed",
+        metadata: {
+          adapter_attempted: this.name,
+          original_url: input.competitorUrl,
+          final_url: finalUrl,
+          redirect_chain: redirectChain,
+          final_http_status: response.status,
+          page_classification: classification.pageClassification,
+          result_message: classification.reason
+        }
+      };
+    }
+
+    if (!response.ok) {
+      throw new AdapterExtractionError(`British Garden Centres adapter failed: HTTP ${response.status}`, {
+        adapter_attempted: this.name,
+        original_url: input.competitorUrl,
+        final_url: finalUrl,
+        redirect_chain: redirectChain,
+        final_http_status: response.status,
+        page_classification: classification.pageClassification,
+        body_preview: previewBody(html)
+      });
+    }
+
+    const visibleHtml = extractVisibleHtml(html);
+    const selectorChecks = ["#singleProductInfo", "form[name=buyquantity]", "h2.fs-30.text-tertiary", "p.rrp-price", "button#AddToBasketButton"];
+    const selectorsFound: Record<string, boolean> = {
+      "#singleProductInfo": /id=["']singleProductInfo["']/i.test(visibleHtml),
+      "form[name=buyquantity]": /<form\b[^>]*name=["']buyquantity["'][^>]*>/i.test(visibleHtml),
+      "h2.fs-30.text-tertiary": /<h2\b[^>]*class=["'][^"']*fs-30[^"']*text-tertiary[^"']*["'][^>]*>/i.test(visibleHtml),
+      "p.rrp-price": /<p\b[^>]*class=["'][^"']*rrp-price[^"']*["'][^>]*>/i.test(visibleHtml),
+      "button#AddToBasketButton": /<button\b[^>]*id=["']AddToBasketButton["'][^>]*>/i.test(visibleHtml)
+    };
+
+    const purchaseAreaMatch = visibleHtml.match(/<div\b[^>]*id=["']singleProductInfo["'][^>]*>[\s\S]*?<\/div>/i)?.[0]
+      ?? visibleHtml.match(/<form\b[^>]*name=["']buyquantity["'][^>]*>[\s\S]*?<\/form>/i)?.[0]
+      ?? visibleHtml;
+
+    const allContexts = [
+      { source: "purchase_area", content: purchaseAreaMatch, boost: 30 },
+      { source: "visible_page", content: visibleHtml, boost: 0 }
+    ];
+
+    const priceCandidates: Array<Record<string, unknown>> = [];
+    for (const ctx of allContexts) {
+      const tokenRe = /(?:£|&pound;)\s*([\d]{1,3}(?:,[\d]{3})*(?:\.\d{2})?|[\d]+(?:\.\d{2})?)/gi;
+      for (const match of ctx.content.matchAll(tokenRe)) {
+        const full = match[0];
+        const parsed = parseGbpCurrency(full);
+        if (parsed === null || parsed <= 0) continue;
+        const start = Math.max(0, match.index - 80);
+        const end = Math.min(ctx.content.length, match.index + full.length + 80);
+        const surrounding = normalizeWhitespace(stripTags(ctx.content.slice(start, end))).toLowerCase();
+        const nowLabel = /\bnow\b/.test(surrounding);
+        const oldLabel = /\bwas\b|\brrp\b|compare\s+at|save/.test(surrounding);
+        const noisy = /finance|per\s+month|delivery\s+from|order\s+over|quantity|postcode/.test(surrounding);
+        let score = Number(ctx.boost);
+        if (nowLabel) score += 20;
+        if (oldLabel) score -= 30;
+        if (noisy) score -= 25;
+        if (parsed > 10000) score -= 20;
+
+        priceCandidates.push({
+          value: parsed,
+          text: full,
+          source: ctx.source,
+          surrounding,
+          score,
+          now_label: nowLabel,
+          old_label: oldLabel,
+          noisy_context: noisy
+        });
+      }
+    }
+
+    const uniqueCandidates = Array.from(new Map(priceCandidates.map((c) => [`${c.value}-${c.source}-${c.surrounding}`, c])).values());
+    uniqueCandidates.sort((a, b) => Number(b.score) - Number(a.score));
+
+    const selected = uniqueCandidates.find((candidate) => Number(candidate.score) >= 0 && candidate.old_label !== true)
+      ?? uniqueCandidates.find((candidate) => candidate.old_label !== true)
+      ?? uniqueCandidates[0]
+      ?? null;
+
+    if (!selected || typeof selected.value !== "number") {
+      throw new AdapterExtractionError("British Garden Centres price extraction failed", {
+        adapter_attempted: this.name,
+        original_url: input.competitorUrl,
+        final_url: finalUrl,
+        redirect_chain: redirectChain,
+        final_http_status: response.status,
+        page_classification: classification.pageClassification,
+        selectors_checked: selectorChecks,
+        selectors_found: selectorsFound,
+        price_candidates: uniqueCandidates
+      });
+    }
+
+    const wasCandidate = uniqueCandidates.find((candidate) => candidate.old_label === true && typeof candidate.value === "number" && Number(candidate.value) > Number(selected.value));
+    const stockDetection = detectBritishGardenCentresStock(html);
+
+    return {
+      competitor_current_price: Number(selected.value),
+      competitor_promo_price: null,
+      competitor_was_price: wasCandidate ? Number(wasCandidate.value) : null,
+      competitor_stock_status: stockDetection.stock,
+      result_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok",
+      match_confidence: "High",
+      raw_price_text: String(selected.text ?? selected.value),
+      extraction_source: "british_garden_centres_adapter",
+      metadata: {
+        adapter_attempted: this.name,
+        original_url: input.competitorUrl,
+        final_url: finalUrl,
+        redirect_chain: redirectChain,
+        final_http_status: response.status,
+        page_classification: classification.pageClassification,
+        selectors_checked: selectorChecks,
+        selectors_found: selectorsFound,
+        price_candidates: uniqueCandidates,
+        selected_price_reason: selected.now_label ? "now_label_in_purchase_area" : "highest_ranked_purchase_area_candidate",
+        selected_price_candidate: selected,
+        stock_signals: stockDetection.signals,
+        stock_decision_reason: stockDetection.reason
+      }
+    };
+  }
+}
+
+
+
 class BentsAdapter implements CompetitorAdapter {
   name = "bents-first-party";
 
@@ -2685,6 +2996,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (isSquiresHost(host)) return false;
     if (isYorkshireGardenCentresHost(host)) return false;
     if (isBentsHost(host)) return false;
+    if (isBritishGardenCentresHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -2760,6 +3072,7 @@ const adapters: CompetitorAdapter[] = [
   new WebbsAdapter(),
   new SquiresAdapter(),
   new YorkshireGardenCentresAdapter(),
+  new BritishGardenCentresAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
