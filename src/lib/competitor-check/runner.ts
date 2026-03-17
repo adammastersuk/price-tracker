@@ -12,7 +12,7 @@ import {
   insertProductCycleHistory,
   insertProductSourceHistory
 } from "@/lib/db";
-import { AdapterExtractionError, selectAdapter } from "@/lib/competitor-check/adapters";
+import { AdapterExtractionError, selectAdapter, type AdapterResult } from "@/lib/competitor-check/adapters";
 import { classifyAdapterOutcome } from "@/lib/competitor-check/classification";
 import {
   completeRefreshRun,
@@ -50,6 +50,9 @@ interface RefreshTarget {
     competitorUrl: string;
     previousPrice: number | null;
     previousValidPrice: number | null;
+    previousLastCheckStatus?: string | null;
+    previousSuspiciousFlag?: boolean | null;
+    previousExtractionMetadata?: Record<string, unknown> | null;
     lastCheckedAt?: string;
   }>;
   cycleTargets: Array<{
@@ -117,6 +120,61 @@ function isSuspicious(previousPrice: number | null, nextPrice: number | null, hi
 
 function lowConfidence(result: Awaited<ReturnType<ReturnType<typeof selectAdapter>["fetchPriceSignal"]>>) {
   return result.match_confidence === "Low" || result.match_confidence === "Needs review";
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function hasHighConfidencePriceContext(result: AdapterResult): boolean {
+  const selectedReason = String(result.metadata?.selected_price_reason ?? "").toLowerCase();
+  const extractionSource = String(result.extraction_source ?? "").toLowerCase();
+  const hasSelectedCandidate = typeof result.metadata?.selected_price_candidate === "object" && result.metadata?.selected_price_candidate !== null;
+  const hasRejectedFinanceNoise = Array.isArray(result.metadata?.rejected_price_candidates)
+    && (result.metadata?.rejected_price_candidates as Array<Record<string, unknown>>).some((candidate) =>
+      /finance|payment|threshold|range/i.test(String(candidate.rejectionReason ?? candidate.rejection_reason ?? ""))
+    );
+
+  return result.competitor_current_price !== null
+    && result.match_confidence === "High"
+    && (
+      extractionSource.includes("british_garden_centres")
+      || selectedReason.includes("now_label")
+      || selectedReason.includes("current_price_selector")
+      || hasSelectedCandidate
+    )
+    && (hasRejectedFinanceNoise || !lowConfidence(result));
+}
+
+export function shouldOverrideSuspiciousRetention(input: {
+  reasons: string[];
+  fetched: AdapterResult;
+  previousLastCheckStatus?: string | null;
+  previousSuspiciousFlag?: boolean | null;
+  previousExtractionMetadata?: Record<string, unknown> | null;
+}): { override: boolean; reason: string; filteredReasons: string[] } {
+  const previousWasSuspicious =
+    input.previousLastCheckStatus === "suspicious"
+    || asBoolean(input.previousSuspiciousFlag)
+    || asBoolean(input.previousExtractionMetadata?.trust_rejected)
+    || asBoolean(input.previousExtractionMetadata?.forced_suspicious);
+
+  if (!previousWasSuspicious || !hasHighConfidencePriceContext(input.fetched)) {
+    return { override: false, reason: "", filteredReasons: input.reasons };
+  }
+
+  const filteredReasons = input.reasons.filter((reason) => reason !== "Large delta vs previous checked competitor price.");
+  const override = filteredReasons.length === 0;
+
+  return {
+    override,
+    reason: override ? "High-confidence extraction replaced previously suspicious retained value" : "",
+    filteredReasons
+  };
 }
 
 function isImplausibleAgainstBents(bentsPrice: number, competitorPrice: number | null, lowThresholdPercent: number, highThresholdPercent: number): boolean {
@@ -205,14 +263,23 @@ async function buildTargets(options: RefreshOptions, runtime: Awaited<ReturnType
       bentsUrl: product.bentsProductUrl,
       cycleTargets,
       refreshTier,
-      competitorMappings: filteredMappings.map((mapping) => ({
-        mappingId: mapping.id,
-        competitorName: mapping.competitor_name,
-        competitorUrl: mapping.competitor_url ?? "",
-        previousPrice: mapping.competitor_current_price,
-        previousValidPrice: mapping.competitor_current_price,
-        lastCheckedAt: mapping.last_checked_at
-      }))
+      competitorMappings: filteredMappings.map((mapping) => {
+        const previousMetadata = toPlainObject(mapping.extraction_metadata, {});
+        const extractedPreviousValid = asNumber(previousMetadata.previous_valid_price);
+        const fallbackPrevious = mapping.competitor_current_price;
+
+        return {
+          mappingId: mapping.id,
+          competitorName: mapping.competitor_name,
+          competitorUrl: mapping.competitor_url ?? "",
+          previousPrice: mapping.competitor_current_price,
+          previousValidPrice: extractedPreviousValid ?? fallbackPrevious,
+          previousLastCheckStatus: mapping.last_check_status,
+          previousSuspiciousFlag: mapping.suspicious_change_flag,
+          previousExtractionMetadata: previousMetadata,
+          lastCheckedAt: mapping.last_checked_at
+        };
+      })
     });
   }
 
@@ -399,7 +466,7 @@ async function checkCompetitorSource(
       };
     }
 
-    const reasons = resultStatus === "ok"
+    const initialReasons = resultStatus === "ok"
       ? suspiciousReason(
           {
             bentsPrice: target.bentsPrice,
@@ -415,8 +482,19 @@ async function checkCompetitorSource(
         )
       : [];
 
+    const overrideDecision = shouldOverrideSuspiciousRetention({
+      reasons: initialReasons,
+      fetched,
+      previousLastCheckStatus: mapping.previousLastCheckStatus,
+      previousSuspiciousFlag: mapping.previousSuspiciousFlag,
+      previousExtractionMetadata: mapping.previousExtractionMetadata
+    });
+
+    const reasons = overrideDecision.filteredReasons;
     const suspicious = resultStatus === "ok" && reasons.length > 0;
-    const acceptedCurrentPrice = suspicious ? mapping.previousValidPrice : fetched.competitor_current_price;
+    const acceptedCurrentPrice = suspicious
+      ? (mapping.previousValidPrice ?? mapping.previousPrice)
+      : fetched.competitor_current_price;
     const diff = acceptedCurrentPrice === null ? null : Number((target.bentsPrice - (acceptedCurrentPrice ?? 0)).toFixed(2));
     const diffPct = acceptedCurrentPrice === null || acceptedCurrentPrice === 0
       ? null
@@ -452,7 +530,9 @@ async function checkCompetitorSource(
       last_check_status: suspicious ? "suspicious" : "success",
       check_error_message: suspicious
         ? `Suspicious extraction detected. Previous valid price retained for review. ${reasons.join(" ")}`
-        : removedMessage || outOfStockMessage,
+        : overrideDecision.override
+          ? `High-confidence extraction applied. ${overrideDecision.reason}`
+          : removedMessage || outOfStockMessage,
       raw_price_text: fetched.raw_price_text,
       extraction_source: fetched.extraction_source,
       suspicious_change_flag: suspicious,
@@ -464,8 +544,24 @@ async function checkCompetitorSource(
         trust_rejected: suspicious,
         accepted_current_price: acceptedCurrentPrice,
         extracted_current_price: fetched.competitor_current_price,
+        extracted_price_raw: fetched.raw_price_text ?? null,
+        extracted_price_normalized: fetched.competitor_current_price,
+        selected_candidate: fetched.metadata?.selected_price_candidate ?? null,
+        selected_candidate_reason: fetched.metadata?.selected_price_reason ?? null,
+        previous_stored_price: mapping.previousPrice,
+        previous_valid_price: mapping.previousValidPrice,
+        suspicious_check_input_old_price: mapping.previousPrice,
+        suspicious_check_input_new_price: fetched.competitor_current_price,
+        suspicious_check_reasons_initial: initialReasons,
+        suspicious_check_decision: suspicious ? "rejected_retained_previous" : "accepted_new_extraction",
+        retained_display_price_reason: suspicious
+          ? "previous_valid_price_retained_due_to_suspicious_guard"
+          : overrideDecision.override
+            ? "overrode_previous_suspicious_baseline_with_high_confidence_extraction"
+            : "accepted_extracted_price",
         trust_warnings: reasons,
-        previous_valid_price: mapping.previousValidPrice
+        suspicious_override_applied: overrideDecision.override,
+        suspicious_override_reason: overrideDecision.reason
       }
     };
 
@@ -498,7 +594,12 @@ async function checkCompetitorSource(
           run_status: classification.runStatus,
           availability_status: classification.availabilityStatus,
           trust_rejected: suspicious,
-          trust_warnings: reasons
+          suspicious_check_input_old_price: mapping.previousPrice,
+          suspicious_check_input_new_price: fetched.competitor_current_price,
+          suspicious_check_decision: suspicious ? "rejected_retained_previous" : "accepted_new_extraction",
+          trust_warnings: reasons,
+          suspicious_override_applied: overrideDecision.override,
+          suspicious_override_reason: overrideDecision.reason
         }
       });
     } catch (error) {
