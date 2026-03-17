@@ -355,6 +355,201 @@ function buildWebbsRemovedResult(input: { originalUrl: string; finalUrl: string;
   };
 }
 
+
+type JohnLewisPageClassification = "product" | "non_product" | "not_found";
+
+interface JohnLewisPageDiagnostics {
+  pageClassification: JohnLewisPageClassification;
+  isValidProductPage: boolean;
+  isRemovedLikely: boolean;
+  removalReason: string;
+}
+
+function classifyJohnLewisPage(input: { html: string; originalUrl: string; finalUrl: string; httpStatus: number; }): JohnLewisPageDiagnostics {
+  const visibleHtml = extractVisibleHtml(input.html);
+  const text = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const finalPath = pathFromUrl(input.finalUrl);
+  const originalPath = pathFromUrl(input.originalUrl);
+
+  const hasProductJsonLd = /"@type"\s*:\s*"Product"/i.test(input.html);
+  const hasPdpPriceTestId = /data-testid\s*=\s*["']product:basket:price["']/i.test(visibleHtml);
+  const hasPdpStockTestId = /data-testid\s*=\s*["']product:basket:stock["']/i.test(visibleHtml);
+  const hasAddToBasketCta = /add\s+to\s+basket/i.test(text);
+  const hasProductPath = /^\/[^/?#]+\/?$/i.test(finalPath)
+    && !/^\/(?:search|shop|browse|category|departments|our-services|customer-services|help|wishlist|basket|login)\b/i.test(finalPath);
+
+  const isNotFound = input.httpStatus === 404
+    || input.httpStatus === 410
+    || /page\s+not\s+found|sorry,\s+this\s+page\s+could\s+not\s+be\s+found|product\s+not\s+found|no\s+longer\s+available/i.test(text);
+  if (isNotFound) {
+    return {
+      pageClassification: "not_found",
+      isValidProductPage: false,
+      isRemovedLikely: true,
+      removalReason: "Product no longer available at retailer"
+    };
+  }
+
+  const isValidProductPage = hasPdpPriceTestId || hasPdpStockTestId || (hasProductJsonLd && hasAddToBasketCta && hasProductPath);
+  if (isValidProductPage) {
+    return {
+      pageClassification: "product",
+      isValidProductPage,
+      isRemovedLikely: false,
+      removalReason: ""
+    };
+  }
+
+  const redirectedToDifferentPath = normalizeComparableUrl(input.originalUrl) !== normalizeComparableUrl(input.finalUrl)
+    && pathFromUrl(input.originalUrl) !== finalPath;
+  const originalLookedLikeProduct = /^\/[^/?#]+\/?$/i.test(originalPath);
+  const removedLikely = redirectedToDifferentPath || originalLookedLikeProduct;
+
+  return {
+    pageClassification: "non_product",
+    isValidProductPage: false,
+    isRemovedLikely: removedLikely,
+    removalReason: removedLikely ? "Original URL resolved to a non-product page" : ""
+  };
+}
+
+function extractJohnLewisAddToBasketState(visibleHtml: string): {
+  hasEnabledAddToBasket: boolean;
+  hasDisabledAddToBasket: boolean;
+} {
+  const controls = [...visibleHtml.matchAll(/<(button|a)\b[^>]*>[\s\S]*?<\/\1>/gi)];
+  let hasEnabledAddToBasket = false;
+  let hasDisabledAddToBasket = false;
+
+  for (const controlMatch of controls) {
+    const controlHtml = controlMatch[0];
+    const text = normalizeWhitespace(stripTags(controlHtml)).toLowerCase();
+    if (!/add\s+to\s+basket/.test(text)) continue;
+
+    const disabled = /\bdisabled\b/i.test(controlHtml)
+      || /aria-disabled\s*=\s*["']?true["']?/i.test(controlHtml)
+      || /\bunavailable\b|\bout\s+of\s+stock\b/i.test(text);
+
+    if (disabled) {
+      hasDisabledAddToBasket = true;
+    } else {
+      hasEnabledAddToBasket = true;
+    }
+  }
+
+  return { hasEnabledAddToBasket, hasDisabledAddToBasket };
+}
+
+function detectJohnLewisStockStatus(html: string): {
+  stock: "In Stock" | "Out of Stock" | "Unknown";
+  decisionReason: string;
+  diagnostics: Record<string, unknown>;
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
+  const stockContainerMatches = [
+    ...visibleHtml.matchAll(/<[^>]*data-testid\s*=\s*["']product:basket:stock["'][^>]*>([\s\S]*?)<\//gi)
+  ];
+  const stockContainerText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[1] ?? "")).join(" ")).toLowerCase();
+  const normalizedStockText = normalizeWhitespace(`${stockContainerText} ${visibleText}`.trim());
+  const ctaState = extractJohnLewisAddToBasketState(visibleHtml);
+
+  const hasUnavailableText = /out\s+of\s+stock|currently\s+unavailable|not\s+available/i.test(normalizedStockText);
+  const hasInStockText = /currently\s+in\s+stock\s+online|\bin\s+stock\b|available\s+online/i.test(normalizedStockText);
+
+  if ((hasUnavailableText || ctaState.hasDisabledAddToBasket) && !ctaState.hasEnabledAddToBasket) {
+    return {
+      stock: "Out of Stock",
+      decisionReason: "explicit_unavailable_or_disabled_cta",
+      diagnostics: {
+        stock_text: stockContainerText,
+        has_unavailable_text: hasUnavailableText,
+        has_in_stock_text: hasInStockText,
+        has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
+        has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
+      }
+    };
+  }
+
+  if (hasInStockText) {
+    return {
+      stock: "In Stock",
+      decisionReason: "visible_in_stock_text",
+      diagnostics: {
+        stock_text: stockContainerText,
+        has_unavailable_text: hasUnavailableText,
+        has_in_stock_text: hasInStockText,
+        has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
+        has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
+      }
+    };
+  }
+
+  if (ctaState.hasEnabledAddToBasket) {
+    return {
+      stock: "In Stock",
+      decisionReason: "enabled_add_to_basket_fallback",
+      diagnostics: {
+        stock_text: stockContainerText,
+        has_unavailable_text: hasUnavailableText,
+        has_in_stock_text: hasInStockText,
+        has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
+        has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
+      }
+    };
+  }
+
+  if (hasUnavailableText || ctaState.hasDisabledAddToBasket) {
+    return {
+      stock: "Out of Stock",
+      decisionReason: "unavailable_fallback",
+      diagnostics: {
+        stock_text: stockContainerText,
+        has_unavailable_text: hasUnavailableText,
+        has_in_stock_text: hasInStockText,
+        has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
+        has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
+      }
+    };
+  }
+
+  return {
+    stock: "Unknown",
+    decisionReason: "no_reliable_stock_signal",
+    diagnostics: {
+      stock_text: stockContainerText,
+      has_unavailable_text: hasUnavailableText,
+      has_in_stock_text: hasInStockText,
+      has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
+      has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
+    }
+  };
+}
+
+function buildJohnLewisRemovedResult(input: { originalUrl: string; finalUrl: string; httpStatus: number; reason: string; pageClassification: JohnLewisPageClassification; }): AdapterResult {
+  return {
+    competitor_current_price: null,
+    competitor_promo_price: null,
+    competitor_was_price: null,
+    competitor_stock_status: "URL Unavailable",
+    result_status: "removed",
+    match_confidence: "High",
+    raw_price_text: input.reason,
+    extraction_source: "john_lewis_removed_product",
+    metadata: {
+      adapter_attempted: "john-lewis",
+      original_url: input.originalUrl,
+      final_url: input.finalUrl,
+      final_http_status: input.httpStatus,
+      page_classification: input.pageClassification,
+      internal_result_status: "removed",
+      run_status: "success",
+      availability_status: "url_unavailable",
+      result_message: `URL unavailable: ${input.reason}`
+    }
+  };
+}
+
 interface PriceCandidate {
   value: number;
   context: string;
@@ -454,6 +649,11 @@ function isYorkshireGardenCentresHost(raw: string): boolean {
 function isBentsHost(raw: string): boolean {
   const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
   return /(^|\.)bents\.co\.uk$/i.test(normalizedHost);
+}
+
+function isJohnLewisHost(raw: string): boolean {
+  const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
+  return /(^|\.)johnlewis\.com$/i.test(normalizedHost);
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -2495,6 +2695,152 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
 }
 
 
+class JohnLewisAdapter implements CompetitorAdapter {
+  name = "john-lewis";
+
+  supports(url: string) {
+    return isJohnLewisHost(url);
+  }
+
+  async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
+    const response = await fetch(input.competitorUrl, {
+      headers: { "User-Agent": "BentsPricingTracker/1.0 (+decision-support)" },
+      cache: "no-store"
+    });
+
+    const finalUrl = response.url || input.competitorUrl;
+    const originalUrl = input.competitorUrl;
+
+    const html = await response.text();
+    const page = classifyJohnLewisPage({
+      html,
+      originalUrl,
+      finalUrl,
+      httpStatus: response.status
+    });
+
+    if (!response.ok || page.isRemovedLikely || !page.isValidProductPage) {
+      return buildJohnLewisRemovedResult({
+        originalUrl,
+        finalUrl,
+        httpStatus: response.status,
+        pageClassification: page.pageClassification,
+        reason: page.removalReason || `URL returned non-product content (HTTP ${response.status})`
+      });
+    }
+
+    const visibleHtml = extractVisibleHtml(html);
+    const checkedSelectors = [
+      '[data-testid="product:basket:price"]',
+      'purchase area with Add to basket context',
+      'GBP token fallback near basket block'
+    ];
+
+    const selectorsFound: Record<string, boolean> = {
+      '[data-testid="product:basket:price"]': false,
+      'purchase area with Add to basket context': false,
+      'GBP token fallback near basket block': false
+    };
+
+    const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
+
+    const priceByTestId = [...visibleHtml.matchAll(/<[^>]*data-testid\s*=\s*["']product:basket:price["'][^>]*>([\s\S]*?)<\//gi)];
+    selectorsFound['[data-testid="product:basket:price"]'] = priceByTestId.length > 0;
+    for (const match of priceByTestId) {
+      const extracted = stripTags(match[1] ?? "");
+      if (!extracted) continue;
+      candidateValues.push({
+        source_selector: '[data-testid="product:basket:price"]',
+        extracted_text: extracted,
+        parsed: parseGbpCurrency(extracted)
+      });
+    }
+
+    const purchaseAreaMatch = visibleHtml.match(/<[^>]*data-testid\s*=\s*["']product:basket:[^"']+["'][^>]*>[\s\S]{0,2200}add\s+to\s+basket[\s\S]{0,2200}<\//i)
+      || visibleHtml.match(/<section[^>]*>[\s\S]{0,2500}add\s+to\s+basket[\s\S]{0,2500}<\/section>/i);
+    const purchaseArea = purchaseAreaMatch?.[0] ?? "";
+    selectorsFound['purchase area with Add to basket context'] = Boolean(purchaseArea);
+
+    if (purchaseArea) {
+      for (const token of purchaseArea.matchAll(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/gi)) {
+        const extracted = stripTags(token[0]);
+        candidateValues.push({
+          source_selector: 'purchase area with Add to basket context',
+          extracted_text: extracted,
+          parsed: parseGbpCurrency(extracted)
+        });
+      }
+    }
+
+    const gbpFallback = [...visibleHtml.matchAll(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/gi)].slice(0, 10);
+    selectorsFound['GBP token fallback near basket block'] = gbpFallback.length > 0;
+    for (const token of gbpFallback) {
+      const extracted = stripTags(token[0]);
+      candidateValues.push({
+        source_selector: 'GBP token fallback near basket block',
+        extracted_text: extracted,
+        parsed: parseGbpCurrency(extracted)
+      });
+    }
+
+    const accepted = candidateValues.find((candidate) => candidate.source_selector === '[data-testid="product:basket:price"]' && candidate.parsed !== null && candidate.parsed > 0)
+      ?? candidateValues.find((candidate) => candidate.source_selector === 'purchase area with Add to basket context' && candidate.parsed !== null && candidate.parsed > 0)
+      ?? candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0)
+      ?? null;
+
+    const stockDetection = detectJohnLewisStockStatus(html);
+
+    if (!accepted?.parsed) {
+      throw new AdapterExtractionError(
+        `John Lewis price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}`,
+        {
+          adapter_attempted: this.name,
+          original_url: originalUrl,
+          final_url: finalUrl,
+          final_http_status: response.status,
+          page_classification: page.pageClassification,
+          selectors_checked: checkedSelectors,
+          selectors_found: selectorsFound,
+          candidate_values_found: candidateValues,
+          stock_signals_found: stockDetection.diagnostics,
+          stock_decision_reason: stockDetection.decisionReason,
+          rejection_reasons: ["required_john_lewis_price_selector_missing_or_invalid"]
+        }
+      );
+    }
+
+    return {
+      competitor_current_price: accepted.parsed,
+      competitor_promo_price: null,
+      competitor_was_price: null,
+      competitor_stock_status: stockDetection.stock,
+      result_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok",
+      match_confidence: "High",
+      raw_price_text: accepted.extracted_text,
+      extraction_source: "john_lewis_selector_adapter",
+      metadata: {
+        adapter_attempted: this.name,
+        original_url: originalUrl,
+        final_url: finalUrl,
+        final_http_status: response.status,
+        page_classification: page.pageClassification,
+        internal_result_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok",
+        run_status: "success",
+        availability_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : stockDetection.stock === "In Stock" ? "in_stock" : "unknown",
+        selectors_checked: checkedSelectors,
+        selectors_found: selectorsFound,
+        candidate_values_found: candidateValues,
+        accepted_value: accepted.parsed,
+        accepted_selector: accepted.source_selector,
+        stock_signals_found: stockDetection.diagnostics,
+        stock_decision_reason: stockDetection.decisionReason,
+        rejected_values: candidateValues.filter((candidate) => candidate !== accepted)
+      }
+    };
+  }
+}
+
+
 class BentsAdapter implements CompetitorAdapter {
   name = "bents-first-party";
 
@@ -2685,6 +3031,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (isSquiresHost(host)) return false;
     if (isYorkshireGardenCentresHost(host)) return false;
     if (isBentsHost(host)) return false;
+    if (isJohnLewisHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -2760,6 +3107,7 @@ const adapters: CompetitorAdapter[] = [
   new WebbsAdapter(),
   new SquiresAdapter(),
   new YorkshireGardenCentresAdapter(),
+  new JohnLewisAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
