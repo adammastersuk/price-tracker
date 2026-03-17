@@ -356,27 +356,27 @@ function buildWebbsRemovedResult(input: { originalUrl: string; finalUrl: string;
 }
 
 
-type JohnLewisPageClassification = "product" | "non_product" | "not_found";
+type BbqWorldPageClassification = "product" | "non_product" | "not_found";
 
-interface JohnLewisPageDiagnostics {
-  pageClassification: JohnLewisPageClassification;
+interface BbqWorldPageDiagnostics {
+  pageClassification: BbqWorldPageClassification;
   isValidProductPage: boolean;
   isRemovedLikely: boolean;
   removalReason: string;
 }
 
-function classifyJohnLewisPage(input: { html: string; originalUrl: string; finalUrl: string; httpStatus: number; }): JohnLewisPageDiagnostics {
+function classifyBbqWorldPage(input: { html: string; originalUrl: string; finalUrl: string; httpStatus: number; }): BbqWorldPageDiagnostics {
   const visibleHtml = extractVisibleHtml(input.html);
   const text = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
   const finalPath = pathFromUrl(input.finalUrl);
   const originalPath = pathFromUrl(input.originalUrl);
 
   const hasProductJsonLd = /"@type"\s*:\s*"Product"/i.test(input.html);
-  const hasPdpPriceTestId = /data-testid\s*=\s*["']product:basket:price["']/i.test(visibleHtml);
-  const hasPdpStockTestId = /data-testid\s*=\s*["']product:basket:stock["']/i.test(visibleHtml);
+  const hasRedPriceFont = /<font\b[^>]*color\s*=\s*["']?red["']?[^>]*>[\s\S]*?(?:£|&pound;|GBP)\s*[\d,.]{1,12}/i.test(visibleHtml);
+  const hasInStockCell = /in\s*stock\s*:\s*(?:yes|no)/i.test(text);
   const hasAddToBasketCta = /add\s+to\s+basket/i.test(text);
-  const hasProductPath = /^\/[^/?#]+\/?$/i.test(finalPath)
-    && !/^\/(?:search|shop|browse|category|departments|our-services|customer-services|help|wishlist|basket|login)\b/i.test(finalPath);
+  const hasProductPath = /^\/[^?#]+$/i.test(finalPath)
+    && !/^\/(?:search|shop|browse|category|categories|departments|our-services|customer-services|help|basket|login)\b/i.test(finalPath);
 
   const isNotFound = input.httpStatus === 404
     || input.httpStatus === 410
@@ -390,7 +390,7 @@ function classifyJohnLewisPage(input: { html: string; originalUrl: string; final
     };
   }
 
-  const isValidProductPage = hasPdpPriceTestId || hasPdpStockTestId || (hasProductJsonLd && hasAddToBasketCta && hasProductPath);
+  const isValidProductPage = (hasRedPriceFont && hasAddToBasketCta) || hasInStockCell || (hasProductJsonLd && hasAddToBasketCta && hasProductPath);
   if (isValidProductPage) {
     return {
       pageClassification: "product",
@@ -413,7 +413,7 @@ function classifyJohnLewisPage(input: { html: string; originalUrl: string; final
   };
 }
 
-function extractJohnLewisAddToBasketState(visibleHtml: string): {
+function extractBbqWorldAddToBasketState(visibleHtml: string): {
   hasEnabledAddToBasket: boolean;
   hasDisabledAddToBasket: boolean;
 } {
@@ -440,22 +440,24 @@ function extractJohnLewisAddToBasketState(visibleHtml: string): {
   return { hasEnabledAddToBasket, hasDisabledAddToBasket };
 }
 
-function detectJohnLewisStockStatus(html: string): {
-  stock: "In Stock" | "Out of Stock" | "Unknown";
+function detectBbqWorldStockStatus(html: string): {
+  stock: "In Stock" | "Low Stock" | "Out of Stock" | "Unknown";
   decisionReason: string;
   diagnostics: Record<string, unknown>;
 } {
   const visibleHtml = extractVisibleHtml(html);
   const visibleText = normalizeWhitespace(stripTags(visibleHtml)).toLowerCase();
   const stockContainerMatches = [
-    ...visibleHtml.matchAll(/<[^>]*data-testid\s*=\s*["']product:basket:stock["'][^>]*>([\s\S]*?)<\//gi)
+    ...visibleHtml.matchAll(/<tr\b[^>]*>[\s\S]{0,1000}?in\s*stock\s*:[\s\S]*?<\/tr>/gi),
+    ...visibleHtml.matchAll(/<[^>]*class=["'][^"']*(?:stock|availability|inventory)[^"']*["'][^>]*>[\s\S]*?<\//gi)
   ];
-  const stockContainerText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[1] ?? "")).join(" ")).toLowerCase();
+  const stockContainerText = normalizeWhitespace(stockContainerMatches.map((match) => stripTags(match[0] ?? "")).join(" ")).toLowerCase();
   const normalizedStockText = normalizeWhitespace(`${stockContainerText} ${visibleText}`.trim());
-  const ctaState = extractJohnLewisAddToBasketState(visibleHtml);
+  const ctaState = extractBbqWorldAddToBasketState(visibleHtml);
 
-  const hasUnavailableText = /out\s+of\s+stock|currently\s+unavailable|not\s+available/i.test(normalizedStockText);
-  const hasInStockText = /currently\s+in\s+stock\s+online|\bin\s+stock\b|available\s+online/i.test(normalizedStockText);
+  const hasUnavailableText = /out\s+of\s+stock|currently\s+unavailable|not\s+available|in\s*stock\s*:\s*no/i.test(normalizedStockText);
+  const hasInStockText = /currently\s+in\s+stock\s+online|\bin\s+stock\b|available\s+online|in\s*stock\s*:\s*yes|more\s+than\s+\d+\s+available/i.test(normalizedStockText);
+  const hasLowStockText = /low\s+stock|limited\s+stock|only\s+\d+\s+left/i.test(normalizedStockText);
 
   if ((hasUnavailableText || ctaState.hasDisabledAddToBasket) && !ctaState.hasEnabledAddToBasket) {
     return {
@@ -471,6 +473,21 @@ function detectJohnLewisStockStatus(html: string): {
     };
   }
 
+  if (hasLowStockText) {
+    return {
+      stock: "Low Stock",
+      decisionReason: "low_stock_indicator",
+      diagnostics: {
+        stock_text: stockContainerText,
+        has_unavailable_text: hasUnavailableText,
+        has_in_stock_text: hasInStockText,
+        has_low_stock_text: hasLowStockText,
+        has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
+        has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
+      }
+    };
+  }
+
   if (hasInStockText) {
     return {
       stock: "In Stock",
@@ -479,6 +496,7 @@ function detectJohnLewisStockStatus(html: string): {
         stock_text: stockContainerText,
         has_unavailable_text: hasUnavailableText,
         has_in_stock_text: hasInStockText,
+        has_low_stock_text: hasLowStockText,
         has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
         has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
       }
@@ -493,6 +511,7 @@ function detectJohnLewisStockStatus(html: string): {
         stock_text: stockContainerText,
         has_unavailable_text: hasUnavailableText,
         has_in_stock_text: hasInStockText,
+        has_low_stock_text: hasLowStockText,
         has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
         has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
       }
@@ -507,6 +526,7 @@ function detectJohnLewisStockStatus(html: string): {
         stock_text: stockContainerText,
         has_unavailable_text: hasUnavailableText,
         has_in_stock_text: hasInStockText,
+        has_low_stock_text: hasLowStockText,
         has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
         has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
       }
@@ -520,13 +540,14 @@ function detectJohnLewisStockStatus(html: string): {
       stock_text: stockContainerText,
       has_unavailable_text: hasUnavailableText,
       has_in_stock_text: hasInStockText,
+      has_low_stock_text: hasLowStockText,
       has_enabled_add_to_basket: ctaState.hasEnabledAddToBasket,
       has_disabled_add_to_basket: ctaState.hasDisabledAddToBasket
     }
   };
 }
 
-function buildJohnLewisRemovedResult(input: { originalUrl: string; finalUrl: string; httpStatus: number; reason: string; pageClassification: JohnLewisPageClassification; }): AdapterResult {
+function buildBbqWorldRemovedResult(input: { originalUrl: string; finalUrl: string; httpStatus: number; reason: string; pageClassification: BbqWorldPageClassification; }): AdapterResult {
   return {
     competitor_current_price: null,
     competitor_promo_price: null,
@@ -535,9 +556,9 @@ function buildJohnLewisRemovedResult(input: { originalUrl: string; finalUrl: str
     result_status: "removed",
     match_confidence: "High",
     raw_price_text: input.reason,
-    extraction_source: "john_lewis_removed_product",
+    extraction_source: "bbq_world_removed_product",
     metadata: {
-      adapter_attempted: "john-lewis",
+      adapter_attempted: "bbq-world",
       original_url: input.originalUrl,
       final_url: input.finalUrl,
       final_http_status: input.httpStatus,
@@ -651,9 +672,9 @@ function isBentsHost(raw: string): boolean {
   return /(^|\.)bents\.co\.uk$/i.test(normalizedHost);
 }
 
-function isJohnLewisHost(raw: string): boolean {
+function isBbqWorldHost(raw: string): boolean {
   const normalizedHost = normalizeHostname(hostFromUrl(raw) || raw);
-  return /(^|\.)johnlewis\.com$/i.test(normalizedHost);
+  return /(^|\.)bbqworld\.co\.uk$/i.test(normalizedHost);
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -2695,11 +2716,11 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
 }
 
 
-class JohnLewisAdapter implements CompetitorAdapter {
-  name = "john-lewis";
+class BbqWorldAdapter implements CompetitorAdapter {
+  name = "bbq-world";
 
   supports(url: string) {
-    return isJohnLewisHost(url);
+    return isBbqWorldHost(url);
   }
 
   async fetchPriceSignal(input: AdapterInput): Promise<AdapterResult> {
@@ -2710,9 +2731,9 @@ class JohnLewisAdapter implements CompetitorAdapter {
 
     const finalUrl = response.url || input.competitorUrl;
     const originalUrl = input.competitorUrl;
-
     const html = await response.text();
-    const page = classifyJohnLewisPage({
+
+    const page = classifyBbqWorldPage({
       html,
       originalUrl,
       finalUrl,
@@ -2720,7 +2741,7 @@ class JohnLewisAdapter implements CompetitorAdapter {
     });
 
     if (!response.ok || page.isRemovedLikely || !page.isValidProductPage) {
-      return buildJohnLewisRemovedResult({
+      return buildBbqWorldRemovedResult({
         originalUrl,
         finalUrl,
         httpStatus: response.status,
@@ -2731,68 +2752,76 @@ class JohnLewisAdapter implements CompetitorAdapter {
 
     const visibleHtml = extractVisibleHtml(html);
     const checkedSelectors = [
-      '[data-testid="product:basket:price"]',
-      'purchase area with Add to basket context',
-      'GBP token fallback near basket block'
+      'strong > font[color="red"] near Add to Basket',
+      'purchase row/cell with Add to Basket context',
+      'GBP token fallback near purchase area'
     ];
 
     const selectorsFound: Record<string, boolean> = {
-      '[data-testid="product:basket:price"]': false,
-      'purchase area with Add to basket context': false,
-      'GBP token fallback near basket block': false
+      'strong > font[color="red"] near Add to Basket': false,
+      'purchase row/cell with Add to Basket context': false,
+      'GBP token fallback near purchase area': false
     };
 
     const candidateValues: Array<{ source_selector: string; extracted_text: string; parsed: number | null }> = [];
 
-    const priceByTestId = [...visibleHtml.matchAll(/<[^>]*data-testid\s*=\s*["']product:basket:price["'][^>]*>([\s\S]*?)<\//gi)];
-    selectorsFound['[data-testid="product:basket:price"]'] = priceByTestId.length > 0;
-    for (const match of priceByTestId) {
+    const purchaseAreaMatch = visibleHtml.match(/<table\b[\s\S]{0,5000}?add\s+to\s+basket[\s\S]{0,5000}?<\/table>/i)
+      || visibleHtml.match(/<form\b[\s\S]{0,4000}?add\s+to\s+basket[\s\S]{0,4000}?<\/form>/i)
+      || visibleHtml.match(/<[^>]*>[\s\S]{0,2000}?in\s*stock\s*:\s*(?:yes|no)[\s\S]{0,2000}?<\//i);
+    const purchaseArea = purchaseAreaMatch?.[0] ?? "";
+
+    const redPriceMatches = [...(purchaseArea || visibleHtml).matchAll(/<strong\b[^>]*>[\s\S]{0,120}?<font\b[^>]*color\s*=\s*["']?red["']?[^>]*>([\s\S]*?)<\/font>[\s\S]{0,120}?<\/strong>/gi)];
+    selectorsFound['strong > font[color="red"] near Add to Basket'] = redPriceMatches.length > 0;
+    for (const match of redPriceMatches) {
       const extracted = stripTags(match[1] ?? "");
       if (!extracted) continue;
       candidateValues.push({
-        source_selector: '[data-testid="product:basket:price"]',
+        source_selector: 'strong > font[color="red"] near Add to Basket',
         extracted_text: extracted,
         parsed: parseGbpCurrency(extracted)
       });
     }
 
-    const purchaseAreaMatch = visibleHtml.match(/<[^>]*data-testid\s*=\s*["']product:basket:[^"']+["'][^>]*>[\s\S]{0,2200}add\s+to\s+basket[\s\S]{0,2200}<\//i)
-      || visibleHtml.match(/<section[^>]*>[\s\S]{0,2500}add\s+to\s+basket[\s\S]{0,2500}<\/section>/i);
-    const purchaseArea = purchaseAreaMatch?.[0] ?? "";
-    selectorsFound['purchase area with Add to basket context'] = Boolean(purchaseArea);
-
     if (purchaseArea) {
+      selectorsFound['purchase row/cell with Add to Basket context'] = true;
       for (const token of purchaseArea.matchAll(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/gi)) {
         const extracted = stripTags(token[0]);
+        if (!extracted) continue;
         candidateValues.push({
-          source_selector: 'purchase area with Add to basket context',
+          source_selector: 'purchase row/cell with Add to Basket context',
           extracted_text: extracted,
           parsed: parseGbpCurrency(extracted)
         });
       }
     }
 
-    const gbpFallback = [...visibleHtml.matchAll(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/gi)].slice(0, 10);
-    selectorsFound['GBP token fallback near basket block'] = gbpFallback.length > 0;
+    const gbpFallback = [...visibleHtml.matchAll(/(?:£|&pound;|GBP)\s*[\d,.]{1,12}/gi)].slice(0, 12);
+    selectorsFound['GBP token fallback near purchase area'] = gbpFallback.length > 0;
     for (const token of gbpFallback) {
       const extracted = stripTags(token[0]);
+      if (!extracted) continue;
       candidateValues.push({
-        source_selector: 'GBP token fallback near basket block',
+        source_selector: 'GBP token fallback near purchase area',
         extracted_text: extracted,
         parsed: parseGbpCurrency(extracted)
       });
     }
 
-    const accepted = candidateValues.find((candidate) => candidate.source_selector === '[data-testid="product:basket:price"]' && candidate.parsed !== null && candidate.parsed > 0)
-      ?? candidateValues.find((candidate) => candidate.source_selector === 'purchase area with Add to basket context' && candidate.parsed !== null && candidate.parsed > 0)
-      ?? candidateValues.find((candidate) => candidate.parsed !== null && candidate.parsed > 0)
+    const filteredCandidates = candidateValues.filter((candidate) => {
+      const lower = candidate.extracted_text.toLowerCase();
+      return !/rrp|was\s*£|save\s*£|finance|per\s*month/.test(lower);
+    });
+
+    const accepted = filteredCandidates.find((candidate) => candidate.source_selector === 'strong > font[color="red"] near Add to Basket' && candidate.parsed !== null && candidate.parsed > 0)
+      ?? filteredCandidates.find((candidate) => candidate.source_selector === 'purchase row/cell with Add to Basket context' && candidate.parsed !== null && candidate.parsed > 0)
+      ?? filteredCandidates.find((candidate) => candidate.parsed !== null && candidate.parsed > 0)
       ?? null;
 
-    const stockDetection = detectJohnLewisStockStatus(html);
+    const stockDetection = detectBbqWorldStockStatus(html);
 
     if (!accepted?.parsed) {
       throw new AdapterExtractionError(
-        `John Lewis price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}`,
+        `BBQ World price extraction failed. Selectors attempted: ${checkedSelectors.join(", ")}`,
         {
           adapter_attempted: this.name,
           original_url: originalUrl,
@@ -2804,29 +2833,38 @@ class JohnLewisAdapter implements CompetitorAdapter {
           candidate_values_found: candidateValues,
           stock_signals_found: stockDetection.diagnostics,
           stock_decision_reason: stockDetection.decisionReason,
-          rejection_reasons: ["required_john_lewis_price_selector_missing_or_invalid"]
+          rejection_reasons: ["required_bbq_world_price_selector_missing_or_invalid"]
         }
       );
     }
+
+    const internalResultStatus = stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok";
+    const availabilityStatus = stockDetection.stock === "Out of Stock"
+      ? "out_of_stock"
+      : stockDetection.stock === "Low Stock"
+        ? "low_stock"
+        : stockDetection.stock === "In Stock"
+          ? "in_stock"
+          : "unknown";
 
     return {
       competitor_current_price: accepted.parsed,
       competitor_promo_price: null,
       competitor_was_price: null,
       competitor_stock_status: stockDetection.stock,
-      result_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok",
+      result_status: internalResultStatus,
       match_confidence: "High",
       raw_price_text: accepted.extracted_text,
-      extraction_source: "john_lewis_selector_adapter",
+      extraction_source: "bbq_world_selector_adapter",
       metadata: {
         adapter_attempted: this.name,
         original_url: originalUrl,
         final_url: finalUrl,
         final_http_status: response.status,
         page_classification: page.pageClassification,
-        internal_result_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok",
+        internal_result_status: internalResultStatus,
         run_status: "success",
-        availability_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : stockDetection.stock === "In Stock" ? "in_stock" : "unknown",
+        availability_status: availabilityStatus,
         selectors_checked: checkedSelectors,
         selectors_found: selectorsFound,
         candidate_values_found: candidateValues,
@@ -3031,7 +3069,7 @@ export class GenericHtmlPriceExtractorAdapter implements CompetitorAdapter {
     if (isSquiresHost(host)) return false;
     if (isYorkshireGardenCentresHost(host)) return false;
     if (isBentsHost(host)) return false;
-    if (isJohnLewisHost(host)) return false;
+    if (isBbqWorldHost(host)) return false;
     return /^https?:\/\//.test(url);
   }
 
@@ -3107,7 +3145,7 @@ const adapters: CompetitorAdapter[] = [
   new WebbsAdapter(),
   new SquiresAdapter(),
   new YorkshireGardenCentresAdapter(),
-  new JohnLewisAdapter(),
+  new BbqWorldAdapter(),
   new RetailerPlaceholderAdapter("placeholder-bq", /b\&?q|diy/i),
   new RetailerPlaceholderAdapter("placeholder-homebase", /homebase/i),
   new GenericHtmlPriceExtractorAdapter(),
