@@ -10,7 +10,7 @@ const base = [
   ["FH-6019", "Artisan Panettone 1kg", "Loison", "Foodhall", "Emma Reed", "Mediterranean Fine Foods", 11.5, 24.5, "https://bents.co.uk/artisan-panettone"]
 ] as const;
 
-const competitors = ["Dobbies", "Notcutts", "John Lewis", "B&Q"] as const;
+const competitors = ["Dobbies", "Notcutts", "Homebase", "B&Q"] as const;
 const stock = ["In Stock", "Low Stock", "Out of Stock", "Unknown"] as const;
 
 export const seededRows: TrackedProductRow[] = Array.from({ length: 30 }).map((_, index) => {
