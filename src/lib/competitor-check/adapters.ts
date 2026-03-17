@@ -2511,6 +2511,20 @@ class YorkshireGardenCentresAdapter implements CompetitorAdapter {
 
 type BritishGardenCentresPageClassification = "product" | "non_product" | "blocked" | "removed" | "unknown";
 
+type BritishPriceCandidate = {
+  value: number;
+  text: string;
+  source: string;
+  score: number;
+  contextSnippet: string;
+  nowLabel: boolean;
+  oldLabel: boolean;
+  nearPurchaseControls: boolean;
+  inProductContainer: boolean;
+  rejected: boolean;
+  rejectionReason: string | null;
+};
+
 function pathLooksLikeBritishProduct(path: string): boolean {
   if (!path || path === "/") return false;
   return !/(\/search|\/category|\/categories|\/collections|\/brands?|\/centres?|\/events?|\/advice|\/careers|\/contact)\b/i.test(path);
@@ -2536,7 +2550,7 @@ function classifyBritishGardenCentresPage(input: { originalUrl: string; finalUrl
 
   const looksLikeProductPage = (hasTitle && hasPrice) || (hasPrice && (hasAddToCart || hasPurchaseForm));
 
-  if (status === 404 || status == 410 || hasUnavailableText) {
+  if (status === 404 || status === 410 || hasUnavailableText) {
     return { pageClassification: "removed", looksLikeProductPage: false, removedLikely: true, reason: "Product URL unavailable or removed" };
   }
 
@@ -2615,6 +2629,103 @@ function detectBritishGardenCentresStock(html: string): {
     stock: "Unknown",
     reason: "No reliable stock signals found",
     signals: { hasExplicitOutOfStock, hasDisabledAddToCart, hasEnabledAddToCart, hasLowStock, hasInStockAvailability }
+  };
+}
+
+function britishPriceRejectionReason(contextSnippet: string): string | null {
+  if (/paypal|klarna|clearpay|interest\s*free|installments?|monthly|finance|payment/i.test(contextSnippet)) return "finance_or_payment_context";
+  if (/orders?\s+between|between\s*(?:£|&pound;)|threshold|from\s*(?:£|&pound;)|delivery\s+threshold/i.test(contextSnippet)) return "threshold_or_range_context";
+  if (/(?:£|&pound;)\s*\d[\d,.]*\s*[-–]\s*(?:£|&pound;)\s*\d[\d,.]*/i.test(contextSnippet)) return "price_range_context";
+  return null;
+}
+
+function collectBritishPriceCandidates(html: string): {
+  selectorsFound: Record<string, boolean>;
+  selectorChecks: string[];
+  acceptedCandidates: BritishPriceCandidate[];
+  rejectedCandidates: BritishPriceCandidate[];
+} {
+  const visibleHtml = extractVisibleHtml(html);
+  const selectorChecks = [
+    "#singleProductInfo h2.fs-30.text-tertiary",
+    "#singleProductInfo .fs-30.text-tertiary",
+    "#singleProductInfo p.rrp-price",
+    "#singleProductInfo",
+    "form[name=buyquantity]"
+  ];
+
+  const selectorsFound: Record<string, boolean> = {
+    "#singleProductInfo h2.fs-30.text-tertiary": /<h2\b[^>]*class=["'][^"']*fs-30[^"']*text-tertiary[^"']*["'][^>]*>/i.test(visibleHtml),
+    "#singleProductInfo .fs-30.text-tertiary": /id=["']singleProductInfo["'][\s\S]*?class=["'][^"']*fs-30[^"']*text-tertiary[^"']*["']/i.test(visibleHtml),
+    "#singleProductInfo p.rrp-price": /<p\b[^>]*class=["'][^"']*rrp-price[^"']*["'][^>]*>/i.test(visibleHtml),
+    "#singleProductInfo": /id=["']singleProductInfo["']/i.test(visibleHtml),
+    "form[name=buyquantity]": /<form\b[^>]*name=["']buyquantity["'][^>]*>/i.test(visibleHtml)
+  };
+
+  const scopedContexts: Array<{ source: string; html: string; baseScore: number; inProductContainer: boolean }> = [];
+
+  const explicitPriceBlock = visibleHtml.match(/<h2\b[^>]*class=["'][^"']*fs-30[^"']*text-tertiary[^"']*["'][^>]*>[\s\S]{0,200}<\/h2>/i)?.[0];
+  if (explicitPriceBlock) scopedContexts.push({ source: "current_price_selector", html: explicitPriceBlock, baseScore: 120, inProductContainer: true });
+
+  const singleProductInfo = visibleHtml.match(/<div\b[^>]*id=["']singleProductInfo["'][^>]*>[\s\S]{0,12000}?<\/div>/i)?.[0];
+  if (singleProductInfo) scopedContexts.push({ source: "single_product_info", html: singleProductInfo, baseScore: 70, inProductContainer: true });
+
+  const buyQuantityForm = visibleHtml.match(/<form\b[^>]*name=["']buyquantity["'][^>]*>[\s\S]{0,8000}?<\/form>/i)?.[0];
+  if (buyQuantityForm) scopedContexts.push({ source: "buyquantity_form", html: buyQuantityForm, baseScore: 80, inProductContainer: true });
+
+  scopedContexts.push({ source: "visible_page_fallback", html: visibleHtml, baseScore: 15, inProductContainer: false });
+
+  const candidateMap = new Map<string, BritishPriceCandidate>();
+  const tokenRe = /(?:£|&pound;)\s*([\d]{1,4}(?:,[\d]{3})*(?:\.\d{2})?|[\d]+(?:\.\d{2})?)/gi;
+
+  for (const ctx of scopedContexts) {
+    for (const match of ctx.html.matchAll(tokenRe)) {
+      const full = match[0];
+      const parsed = parseGbpCurrency(full);
+      if (parsed === null || parsed <= 0) continue;
+
+      const start = Math.max(0, (match.index ?? 0) - 150);
+      const end = Math.min(ctx.html.length, (match.index ?? 0) + full.length + 150);
+      const surroundingRaw = ctx.html.slice(start, end);
+      const surrounding = normalizeWhitespace(stripTags(surroundingRaw)).toLowerCase();
+
+      const oldLabel = /\bwas\b|\brrp\b|compare\s+at|strikethrough/.test(surrounding);
+      const nowLabel = /\bnow\b/.test(surrounding);
+      const nearPurchaseControls = /add\s*to\s*cart|buyquantity|product-quantity|qty|quantity/.test(surrounding);
+      const rejectionReason = britishPriceRejectionReason(surrounding);
+      const rejected = Boolean(rejectionReason);
+
+      let score = ctx.baseScore;
+      if (nowLabel) score += 40;
+      if (nearPurchaseControls) score += 25;
+      if (ctx.inProductContainer) score += 10;
+      if (oldLabel) score -= 45;
+      if (parsed >= 1000) score -= 10;
+      if (rejected) score -= 200;
+
+      const key = `${ctx.source}:${parsed}:${surrounding}`;
+      candidateMap.set(key, {
+        value: parsed,
+        text: full,
+        source: ctx.source,
+        score,
+        contextSnippet: surrounding,
+        nowLabel,
+        oldLabel,
+        nearPurchaseControls,
+        inProductContainer: ctx.inProductContainer,
+        rejected,
+        rejectionReason
+      });
+    }
+  }
+
+  const allCandidates = [...candidateMap.values()].sort((a, b) => b.score - a.score);
+  return {
+    selectorsFound,
+    selectorChecks,
+    acceptedCandidates: allCandidates.filter((candidate) => !candidate.rejected),
+    rejectedCandidates: allCandidates.filter((candidate) => candidate.rejected)
   };
 }
 
@@ -2700,66 +2811,14 @@ class BritishGardenCentresAdapter implements CompetitorAdapter {
       });
     }
 
-    const visibleHtml = extractVisibleHtml(html);
-    const selectorChecks = ["#singleProductInfo", "form[name=buyquantity]", "h2.fs-30.text-tertiary", "p.rrp-price", "button#AddToBasketButton"];
-    const selectorsFound: Record<string, boolean> = {
-      "#singleProductInfo": /id=["']singleProductInfo["']/i.test(visibleHtml),
-      "form[name=buyquantity]": /<form\b[^>]*name=["']buyquantity["'][^>]*>/i.test(visibleHtml),
-      "h2.fs-30.text-tertiary": /<h2\b[^>]*class=["'][^"']*fs-30[^"']*text-tertiary[^"']*["'][^>]*>/i.test(visibleHtml),
-      "p.rrp-price": /<p\b[^>]*class=["'][^"']*rrp-price[^"']*["'][^>]*>/i.test(visibleHtml),
-      "button#AddToBasketButton": /<button\b[^>]*id=["']AddToBasketButton["'][^>]*>/i.test(visibleHtml)
-    };
+    const { selectorsFound, selectorChecks, acceptedCandidates, rejectedCandidates } = collectBritishPriceCandidates(html);
 
-    const purchaseAreaMatch = visibleHtml.match(/<div\b[^>]*id=["']singleProductInfo["'][^>]*>[\s\S]*?<\/div>/i)?.[0]
-      ?? visibleHtml.match(/<form\b[^>]*name=["']buyquantity["'][^>]*>[\s\S]*?<\/form>/i)?.[0]
-      ?? visibleHtml;
-
-    const allContexts = [
-      { source: "purchase_area", content: purchaseAreaMatch, boost: 30 },
-      { source: "visible_page", content: visibleHtml, boost: 0 }
-    ];
-
-    const priceCandidates: Array<Record<string, unknown>> = [];
-    for (const ctx of allContexts) {
-      const tokenRe = /(?:£|&pound;)\s*([\d]{1,3}(?:,[\d]{3})*(?:\.\d{2})?|[\d]+(?:\.\d{2})?)/gi;
-      for (const match of ctx.content.matchAll(tokenRe)) {
-        const full = match[0];
-        const parsed = parseGbpCurrency(full);
-        if (parsed === null || parsed <= 0) continue;
-        const start = Math.max(0, match.index - 80);
-        const end = Math.min(ctx.content.length, match.index + full.length + 80);
-        const surrounding = normalizeWhitespace(stripTags(ctx.content.slice(start, end))).toLowerCase();
-        const nowLabel = /\bnow\b/.test(surrounding);
-        const oldLabel = /\bwas\b|\brrp\b|compare\s+at|save/.test(surrounding);
-        const noisy = /finance|per\s+month|delivery\s+from|order\s+over|quantity|postcode/.test(surrounding);
-        let score = Number(ctx.boost);
-        if (nowLabel) score += 20;
-        if (oldLabel) score -= 30;
-        if (noisy) score -= 25;
-        if (parsed > 10000) score -= 20;
-
-        priceCandidates.push({
-          value: parsed,
-          text: full,
-          source: ctx.source,
-          surrounding,
-          score,
-          now_label: nowLabel,
-          old_label: oldLabel,
-          noisy_context: noisy
-        });
-      }
-    }
-
-    const uniqueCandidates = Array.from(new Map(priceCandidates.map((c) => [`${c.value}-${c.source}-${c.surrounding}`, c])).values());
-    uniqueCandidates.sort((a, b) => Number(b.score) - Number(a.score));
-
-    const selected = uniqueCandidates.find((candidate) => Number(candidate.score) >= 0 && candidate.old_label !== true)
-      ?? uniqueCandidates.find((candidate) => candidate.old_label !== true)
-      ?? uniqueCandidates[0]
+    const selected = acceptedCandidates.find((candidate) => !candidate.oldLabel && candidate.score > 0)
+      ?? acceptedCandidates.find((candidate) => !candidate.oldLabel)
+      ?? acceptedCandidates[0]
       ?? null;
 
-    if (!selected || typeof selected.value !== "number") {
+    if (!selected) {
       throw new AdapterExtractionError("British Garden Centres price extraction failed", {
         adapter_attempted: this.name,
         original_url: input.competitorUrl,
@@ -2769,21 +2828,22 @@ class BritishGardenCentresAdapter implements CompetitorAdapter {
         page_classification: classification.pageClassification,
         selectors_checked: selectorChecks,
         selectors_found: selectorsFound,
-        price_candidates: uniqueCandidates
+        price_candidates: acceptedCandidates,
+        rejected_price_candidates: rejectedCandidates
       });
     }
 
-    const wasCandidate = uniqueCandidates.find((candidate) => candidate.old_label === true && typeof candidate.value === "number" && Number(candidate.value) > Number(selected.value));
+    const wasCandidate = acceptedCandidates.find((candidate) => candidate.oldLabel && candidate.value > selected.value);
     const stockDetection = detectBritishGardenCentresStock(html);
 
     return {
-      competitor_current_price: Number(selected.value),
+      competitor_current_price: selected.value,
       competitor_promo_price: null,
-      competitor_was_price: wasCandidate ? Number(wasCandidate.value) : null,
+      competitor_was_price: wasCandidate?.value ?? null,
       competitor_stock_status: stockDetection.stock,
       result_status: stockDetection.stock === "Out of Stock" ? "out_of_stock" : "ok",
       match_confidence: "High",
-      raw_price_text: String(selected.text ?? selected.value),
+      raw_price_text: selected.text,
       extraction_source: "british_garden_centres_adapter",
       metadata: {
         adapter_attempted: this.name,
@@ -2794,8 +2854,13 @@ class BritishGardenCentresAdapter implements CompetitorAdapter {
         page_classification: classification.pageClassification,
         selectors_checked: selectorChecks,
         selectors_found: selectorsFound,
-        price_candidates: uniqueCandidates,
-        selected_price_reason: selected.now_label ? "now_label_in_purchase_area" : "highest_ranked_purchase_area_candidate",
+        price_candidates: acceptedCandidates,
+        rejected_price_candidates: rejectedCandidates,
+        selected_price_reason: selected.nowLabel
+          ? "now_label_near_purchase_controls"
+          : selected.source === "current_price_selector"
+            ? "current_price_selector"
+            : "highest_scored_non_rejected_candidate",
         selected_price_candidate: selected,
         stock_signals: stockDetection.signals,
         stock_decision_reason: stockDetection.reason

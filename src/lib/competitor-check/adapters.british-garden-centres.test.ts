@@ -61,7 +61,7 @@ test("British Garden Centres: valid in-stock PDP picks current price and in-stoc
   assert.equal(result.competitor_stock_status, "In Stock");
 });
 
-test("British Garden Centres: current price is selected over old price", async () => {
+test("British Garden Centres: old Was price does not override current price", async () => {
   mockFetchOnce({
     status: 200,
     url: baseInput.competitorUrl,
@@ -73,19 +73,68 @@ test("British Garden Centres: current price is selected over old price", async (
   assert.equal(result.competitor_was_price, 299);
 });
 
-test("British Garden Centres: large numeric noise is not selected as current product price", async () => {
+test("British Garden Centres: visible product price beats PayPal threshold £2000", async () => {
   mockFetchOnce({
     status: 200,
-    url: baseInput.competitorUrl,
-    body: pdpBody(`
-      <div>Finance from £2,000.00 over 48 months</div>
-      <div>Order over £1,750.00 for free perks</div>
-      <div>Available for Home Delivery</div>
-    `)
+    url: "https://www.britishgardencentres.com/shop/products/ooni-karu-2.html",
+    body: `
+      <html><body>
+        <div id="singleProductInfo">
+          <h1>Ooni Karu 2</h1>
+          <h2 class="fs-30 text-tertiary lh-1 fw-bold">£349.00</h2>
+          <form method="POST" name="buyquantity">
+            <button id="AddToBasketButton" type="submit"><span>Add to Cart</span></button>
+          </form>
+          <div class="paypal-message">Interest free payments available on orders between £30 - £2000 with PayPal</div>
+          <div>Available for Home Delivery</div>
+        </div>
+      </body></html>
+    `
   });
 
   const result = await selectAdapter(baseInput.competitorUrl).fetchPriceSignal(baseInput);
-  assert.equal(result.competitor_current_price, 199);
+  const rejected = (result.metadata?.rejected_price_candidates as Array<{ value: number; rejectionReason: string }> | undefined) ?? [];
+
+  assert.equal(result.competitor_current_price, 349);
+  assert.ok(rejected.some((candidate) => candidate.value === 2000));
+});
+
+test("British Garden Centres: finance-only numeric noise must not be selected", async () => {
+  mockFetchOnce({
+    status: 200,
+    url: baseInput.competitorUrl,
+    body: `
+      <html><body>
+        <div id="singleProductInfo">
+          <h1>Ooni Karu 12</h1>
+          <form method="POST" name="buyquantity">
+            <button id="AddToBasketButton" type="submit"><span>Add to Cart</span></button>
+          </form>
+          <div class="paypal-message">Interest free payments available on orders between £30 - £2000 with PayPal</div>
+        </div>
+      </body></html>
+    `
+  });
+
+  await assert.rejects(async () => selectAdapter(baseInput.competitorUrl).fetchPriceSignal(baseInput), /price extraction failed/i);
+});
+
+test("British Garden Centres: broader fallback still rejects finance threshold context", async () => {
+  mockFetchOnce({
+    status: 200,
+    url: baseInput.competitorUrl,
+    body: `
+      <html><body>
+        <h1>Ooni Karu 12</h1>
+        <div class="summary">Our price is £349.00</div>
+        <div class="paypal-message">Interest free payments available on orders between £30 - £2000 with PayPal</div>
+        <button>Add to Cart</button>
+      </body></html>
+    `
+  });
+
+  const result = await selectAdapter(baseInput.competitorUrl).fetchPriceSignal(baseInput);
+  assert.equal(result.competitor_current_price, 349);
 });
 
 test("British Garden Centres: explicit out-of-stock PDP maps to out_of_stock", async () => {
